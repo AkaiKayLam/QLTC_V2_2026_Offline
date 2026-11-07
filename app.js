@@ -1,10 +1,32 @@
 const DB_NAME="personal-finance-local",STORE="vault",BACKUP_FORMAT="PFLOCAL_BACKUP",ITER=310000;
 let db,cryptoKey=null,appData=null,messageTimer;
 let txDisplayLimit=50;
+let txFilter={kw:"",from:"",to:""};
 const $=id=>document.getElementById(id), uid=()=>crypto.randomUUID(), today=()=>new Date().toISOString().slice(0,10);
 const money=n=>new Intl.NumberFormat("vi-VN",{maximumFractionDigits:0}).format(n||0)+" ₫";
 const fmt=n=>new Intl.NumberFormat("vi-VN",{maximumFractionDigits:0}).format(n||0);
 const digits=s=>String(s||"").replace(/\D/g,"");
+
+const DEFAULT_ACCOUNTS=[
+  {name:"Tiền mặt",type:"Tiền mặt"},
+  {name:"VCB",type:"VCB"},
+  {name:"TCB",type:"TCB"},
+  {name:"MBB",type:"MBB"},
+  {name:"Ví khác",type:"Ví khác"},
+  {name:"Vay nợ",type:"Vay nợ"}
+];
+const DEFAULT_CATS={
+  INCOME:["Tiền lương","Tiền thưởng","Tiền lãi","Thu khác","Vay nợ","Thu nợ"],
+  EXPENSE:[
+    "Đi chợ siêu thị","Ăn uống","Hóa đơn","Tiền nhà","Đi lại","Giúp việc","Chi tiêu thiết yếu khác",
+    "Vui chơi giải trí","Mua sắm","Làm đẹp","Thể thao","Đồ gia dụng","Mua sắm giải trí khác",
+    "Giáo dục","Y tế","Bảo hiểm","Giáo dục Y tế Bảo hiểm khác",
+    "Mở/Nộp tiền tiết kiệm",
+    "Chứng khoán","Bất động sản","Quỹ","Con cái","Bố mẹ","Đầu tư khác",
+    "Sự kiện","Biếu tặng","Dịch vụ công","Chi khác",
+    "Cho vay","Trả nợ"
+  ]
+};
 
 function openDb(){return new Promise((res,rej)=>{let r=indexedDB.open(DB_NAME,1);r.onupgradeneeded=()=>r.result.createObjectStore(STORE);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
 function readVault(){return new Promise((res,rej)=>{let r=db.transaction(STORE).objectStore(STORE).get("main");r.onsuccess=()=>res(r.result||null);r.onerror=()=>rej(r.error)})}
@@ -20,17 +42,10 @@ function showOnly(id){["setupPanel","unlockPanel","appPanel"].forEach(x=>$(x).cl
 
 function defaults(){
   return{
-    schemaVersion:3,
-    accounts:[
-      {id:uid(),name:"Tiền mặt",type:"Tiền mặt",openingBalance:0,active:true},
-      {id:uid(),name:"Ngân hàng",type:"Ngân hàng",openingBalance:0,active:true},
-      {id:uid(),name:"Ví điện tử",type:"Ví điện tử",openingBalance:0,active:true}
-    ],
+    schemaVersion:4,
+    accounts:DEFAULT_ACCOUNTS.map(a=>({id:uid(),name:a.name,type:a.type,openingBalance:0,active:true})),
     transactions:[],
-    categories:{
-      INCOME:["Lương","Thưởng","Thu khác","Thu nợ","Vay nợ"],
-      EXPENSE:["Ăn uống","Di chuyển","Nhà cửa","Hóa đơn","Mua sắm","Y tế","Giải trí","Giáo dục","Chi khác","Cho vay","Trả nợ"]
-    },
+    categories:{INCOME:[...DEFAULT_CATS.INCOME],EXPENSE:[...DEFAULT_CATS.EXPENSE]},
     budgets:[],
     debts:[],
     createdAt:new Date().toISOString()
@@ -38,18 +53,28 @@ function defaults(){
 }
 function normalize(d){
   let x=defaults();
+  let cats={
+    INCOME:d.categories?.INCOME?.length?d.categories.INCOME:x.categories.INCOME,
+    EXPENSE:d.categories?.EXPENSE?.length?d.categories.EXPENSE:x.categories.EXPENSE
+  };
+  // ensure key categories exist
+  for(let c of ["Vay nợ","Thu nợ"]) if(!cats.INCOME.includes(c)) cats.INCOME.push(c);
+  for(let c of ["Cho vay","Trả nợ"]) if(!cats.EXPENSE.includes(c)) cats.EXPENSE.push(c);
   return{
     ...x,...d,
-    schemaVersion:3,
-    accounts:d.accounts||x.accounts,
+    schemaVersion:4,
+    accounts:d.accounts?.length?d.accounts:x.accounts,
     transactions:d.transactions||[],
-    categories:{
-      INCOME:d.categories?.INCOME||x.categories.INCOME,
-      EXPENSE:d.categories?.EXPENSE||x.categories.EXPENSE
-    },
+    categories:cats,
     budgets:d.budgets||[],
     debts:d.debts||[]
   };
+}
+
+function isFutureDate(d){return d && d>today()}
+function ensureNotFuture(dateStr){
+  if(isFutureDate(dateStr)){msg("Nhập lại ngày tháng");return false}
+  return true;
 }
 
 async function setup(p){
@@ -99,6 +124,10 @@ function accountBalance(accId){
   return bal;
 }
 
+function getDebtAccount(){
+  return appData.accounts.find(a=>a.type==="Vay nợ"||a.name==="Vay nợ");
+}
+
 function render(){
   let inc=txTotal("INCOME"), out=txTotal("EXPENSE");
   let opening=appData.accounts.reduce((s,a)=>s+(a.openingBalance||0),0);
@@ -115,35 +144,59 @@ function render(){
   fillCategoryOptions();
   fillTransferOptions();
   fillDebtAccountOptions();
+  initStatsDates();
 }
 
 function sortedTransactions(){
   return [...appData.transactions].sort((a,b)=>b.date.localeCompare(a.date)|| (b.createdAt||"").localeCompare(a.createdAt||""));
 }
 
-function renderTransactions(){
+function filteredTransactions(){
   let rows=sortedTransactions();
+  let {kw,from,to}=txFilter;
+  kw=(kw||"").toLowerCase().trim();
+  return rows.filter(t=>{
+    if(from && t.date<from) return false;
+    if(to && t.date>to) return false;
+    if(kw){
+      let a=appData.accounts.find(x=>x.id===t.accountId);
+      let toA=t.toAccountId?appData.accounts.find(x=>x.id===t.toAccountId):null;
+      let hay=[t.category,t.note,a?.name,toA?.name,t.type].join(" ").toLowerCase();
+      if(!hay.includes(kw)) return false;
+    }
+    return true;
+  });
+}
+
+function renderTransactions(){
+  let rows=filteredTransactions();
   let show=rows.slice(0,txDisplayLimit);
   let html="";
   if(!show.length){
-    html='<div class="empty">Chưa có giao dịch.</div>';
+    html='<div class="empty">Chưa có giao dịch'+(txFilter.kw||txFilter.from||txFilter.to?' khớp tìm kiếm':'')+'.</div>';
   }else{
+    let lastDay="";
     html=show.map(t=>{
+      let dayBlock="";
+      if(t.date!==lastDay){
+        lastDay=t.date;
+        dayBlock=`<div class="day-sep">${esc(t.date)}</div>`;
+      }
       let a=appData.accounts.find(x=>x.id===t.accountId);
       if(t.type==="TRANSFER"){
         let toA=appData.accounts.find(x=>x.id===t.toAccountId);
-        return `<div class="list-row">
+        return dayBlock+`<div class="list-row">
           <div class="grow"><b>Chuyển khoản <span class="transfer-tag">Chuyển</span></b>
-          <small>${esc(t.date)} · ${esc(a?.name||"?")} → ${esc(toA?.name||"?")}${t.note?" · "+esc(t.note):""}</small></div>
+          <small>${esc(a?.name||"?")} → ${esc(toA?.name||"?")}${t.note?" · "+esc(t.note):""}</small></div>
           <strong class="amount">${money(t.amount)}</strong>
           <div class="actions"><button data-del-tx="${t.id}" class="tiny danger">Xóa</button></div>
         </div>`;
       }
       let tag="";
       if(t.debtId) tag=` <span class="debt-tag ${t.type==="INCOME"?"lend":"borrow"}">Vay nợ</span>`;
-      return `<div class="list-row">
+      return dayBlock+`<div class="list-row">
         <div class="grow"><b>${esc(t.category)}${tag}</b>
-        <small>${esc(t.date)} · ${esc(a?.name||"Tài khoản đã xóa")}${t.note?" · "+esc(t.note):""}</small></div>
+        <small>${esc(a?.name||"Tài khoản đã xóa")}${t.note?" · "+esc(t.note):""}</small></div>
         <strong class="amount ${t.type==="INCOME"?"income":"expense"}">${t.type==="INCOME"?"+":"−"}${money(t.amount)}</strong>
         <div class="actions">
           <button data-edit-tx="${t.id}" class="tiny">Sửa</button>
@@ -164,12 +217,13 @@ function renderTransactions(){
 
 function renderAccounts(){
   let q=($("accountSearch")?.value||"").toLowerCase();
-  let arr=appData.accounts.filter(a=>a.name.toLowerCase().includes(q));
+  let arr=appData.accounts.filter(a=>a.name.toLowerCase().includes(q)||a.type.toLowerCase().includes(q));
   $("accountList").innerHTML=arr.map(a=>{
     let bal=accountBalance(a.id);
+    let neg=bal<0;
     return `<div class="list-row">
       <div class="grow"><b>${esc(a.name)}</b><small>${esc(a.type)}</small></div>
-      <strong>${money(bal)}</strong>
+      <strong class="${neg?"neg-bal":""}">${money(bal)}</strong>
       <div class="actions">
         <button class="tiny" data-edit-account="${a.id}">Sửa</button>
         <button class="tiny danger" data-del-account="${a.id}">Xóa</button>
@@ -179,45 +233,82 @@ function renderAccounts(){
 }
 
 function renderCategories(){
+  let groups={
+    "Thu nhập":appData.categories.INCOME,
+    "Chi tiêu thiết yếu":["Đi chợ siêu thị","Ăn uống","Hóa đơn","Tiền nhà","Đi lại","Giúp việc","Chi tiêu thiết yếu khác"],
+    "Mua sắm giải trí":["Vui chơi giải trí","Mua sắm","Làm đẹp","Thể thao","Đồ gia dụng","Mua sắm giải trí khác"],
+    "Giáo dục, Y tế, Bảo hiểm":["Giáo dục","Y tế","Bảo hiểm","Giáo dục Y tế Bảo hiểm khác"],
+    "Tiết kiệm":["Mở/Nộp tiền tiết kiệm"],
+    "Đầu tư":["Chứng khoán","Bất động sản","Quỹ","Con cái","Bố mẹ","Đầu tư khác"],
+    "Chi khác":["Sự kiện","Biếu tặng","Dịch vụ công","Chi khác","Cho vay","Trả nợ"]
+  };
   let out=[];
-  for(let type of ["EXPENSE","INCOME"])
-    for(let name of appData.categories[type])
-      out.push(`<div class="list-row"><div class="grow"><b>${esc(name)}</b><small>${type==="EXPENSE"?"Chi tiêu":"Thu nhập"}</small></div>
-        <button class="tiny danger" data-del-category="${type}|${encodeURIComponent(name)}">Xóa</button></div>`);
+  // income first
+  out.push(`<div class="cat-group">Thu nhập</div>`);
+  for(let name of appData.categories.INCOME){
+    out.push(`<div class="list-row"><div class="grow"><b>${esc(name)}</b><small>Thu nhập</small></div>
+      <button class="tiny danger" data-del-category="INCOME|${encodeURIComponent(name)}">Xóa</button></div>`);
+  }
+  // expense groups
+  let used=new Set();
+  for(let [gname,list] of Object.entries(groups)){
+    if(gname==="Thu nhập") continue;
+    let items=list.filter(n=>appData.categories.EXPENSE.includes(n));
+    if(!items.length) continue;
+    out.push(`<div class="cat-group">${esc(gname)}</div>`);
+    for(let name of items){
+      used.add(name);
+      out.push(`<div class="list-row"><div class="grow"><b>${esc(name)}</b><small>Chi tiêu</small></div>
+        <button class="tiny danger" data-del-category="EXPENSE|${encodeURIComponent(name)}">Xóa</button></div>`);
+    }
+  }
+  // remaining expense
+  let rest=appData.categories.EXPENSE.filter(n=>!used.has(n));
+  if(rest.length){
+    out.push(`<div class="cat-group">Khác</div>`);
+    for(let name of rest){
+      out.push(`<div class="list-row"><div class="grow"><b>${esc(name)}</b><small>Chi tiêu</small></div>
+        <button class="tiny danger" data-del-category="EXPENSE|${encodeURIComponent(name)}">Xóa</button></div>`);
+    }
+  }
   $("categoryList").innerHTML=out.join("")||'<div class="empty">Chưa có danh mục.</div>';
 }
 
 function fillAccountOptions(){
-  let s=$("txAccount"),old=s.value;
+  let s=$("txAccount"),old=s?.value;
+  if(!s) return;
   s.innerHTML=appData.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");
-  if([...s.options].some(o=>o.value===old)) s.value=old;
+  if(old && [...s.options].some(o=>o.value===old)) s.value=old;
 }
 function fillCategoryOptions(){
-  let type=$("txType").value,s=$("txCategory"),old=s.value;
+  let type=$("txType")?.value||"EXPENSE",s=$("txCategory"),old=s?.value;
+  if(!s) return;
   s.innerHTML=(appData.categories[type]||[]).map(c=>`<option>${esc(c)}</option>`).join("");
-  if([...s.options].some(o=>o.value===old)) s.value=old;
+  if(old && [...s.options].some(o=>o.value===old)) s.value=old;
 }
 function fillTransferOptions(){
   let opts=appData.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");
   let f=$("tfFrom"),t=$("tfTo");
+  if(!f||!t) return;
   let of=f.value,ot=t.value;
   f.innerHTML=opts; t.innerHTML=opts;
-  if([...f.options].some(o=>o.value===of)) f.value=of;
-  if([...t.options].some(o=>o.value===ot)) t.value=ot;
+  if(of && [...f.options].some(o=>o.value===of)) f.value=of;
+  if(ot && [...t.options].some(o=>o.value===ot)) t.value=ot;
 }
 function fillDebtAccountOptions(){
-  let opts=appData.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");
+  // only non-debt wallets for related account
+  let wallets=appData.accounts.filter(a=>a.type!=="Vay nợ"&&a.name!=="Vay nợ");
+  let opts=wallets.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");
   let d=$("debtAccount"),r=$("repayAccount");
-  let od=d.value,or=r.value;
-  d.innerHTML=opts; r.innerHTML=opts;
-  if([...d.options].some(o=>o.value===od)) d.value=od;
-  if([...r.options].some(o=>o.value===or)) r.value=or;
+  if(d){let od=d.value;d.innerHTML=opts;if(od&&[...d.options].some(o=>o.value===od))d.value=od}
+  if(r){let or=r.value;r.innerHTML=opts;if(or&&[...r.options].some(o=>o.value===or))r.value=or}
 }
 
 function renderBudgetOptions(){
-  let s=$("budgetCategory"),old=s.value;
+  let s=$("budgetCategory"),old=s?.value;
+  if(!s) return;
   s.innerHTML=appData.categories.EXPENSE.map(c=>`<option>${esc(c)}</option>`).join("");
-  if([...s.options].some(o=>o.value===old)) s.value=old;
+  if(old && [...s.options].some(o=>o.value===old)) s.value=old;
 }
 function monthNow(){return today().slice(0,7)}
 function renderBudgets(){
@@ -276,7 +367,7 @@ function renderDebts(){
 
 function switchTab(t){
   document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===t));
-  ["transactions","accounts","categories","debts","budgets","backup"].forEach(v=>{
+  ["accounts","transactions","debts","stats","budgets","categories","backup","settings"].forEach(v=>{
     let el=$(`${v}View`);
     if(el) el.classList.toggle("hidden",v!==t);
   });
@@ -327,21 +418,11 @@ function exportCsv(){
     let typeLabel=t.type==="INCOME"?"Thu nhập":t.type==="EXPENSE"?"Chi tiêu":"Chuyển khoản";
     let acc=appData.accounts.find(x=>x.id===t.accountId)?.name||"";
     let toAcc=t.toAccountId?(appData.accounts.find(x=>x.id===t.toAccountId)?.name||""):"";
-    let cells=[
-      t.date,
-      typeLabel,
-      t.category||(t.type==="TRANSFER"?"Chuyển khoản":""),
-      t.amount,
-      `"${(acc||"").replace(/"/g,'""')}"`,
-      `"${(toAcc||"").replace(/"/g,'""')}"`,
-      `"${(t.note||"").replace(/"/g,'""')}"`,
-      t.id
-    ];
+    let cells=[t.date,typeLabel,t.category||(t.type==="TRANSFER"?"Chuyển khoản":""),t.amount,`"${(acc||"").replace(/"/g,'""')}"`,`"${(toAcc||"").replace(/"/g,'""')}"`,`"${(t.note||"").replace(/"/g,'""')}"`,t.id];
     lines.push(cells.join(","));
   }
   let bom="\uFEFF";
-  let blob=new Blob([bom+lines.join("\n")],{type:"text/csv;charset=utf-8"});
-  download(blob,`GiaoDich_${today()}.csv`);
+  download(new Blob([bom+lines.join("\n")],{type:"text/csv;charset=utf-8"}),`GiaoDich_${today()}.csv`);
   msg("Đã xuất file CSV. Mở bằng Excel hoặc Google Sheets.");
 }
 
@@ -386,6 +467,46 @@ async function importBackup(file){
   msg("Đã khôi phục dữ liệu.");
 }
 
+/* STATS */
+function initStatsDates(){
+  let now=new Date();
+  let y=now.getFullYear(), m=String(now.getMonth()+1).padStart(2,"0");
+  let last=new Date(y,now.getMonth()+1,0).getDate();
+  if($("statsFrom") && !$("statsFrom").value) $("statsFrom").value=`${y}-${m}-01`;
+  if($("statsTo") && !$("statsTo").value) $("statsTo").value=`${y}-${m}-${String(last).padStart(2,"0")}`;
+  if($("statsYear") && !$("statsYear").value) $("statsYear").value=y;
+}
+function runStats(){
+  let mode=$("statsMode").value;
+  let from,to;
+  if(mode==="year"){
+    let y=$("statsYear").value||new Date().getFullYear();
+    from=`${y}-01-01`; to=`${y}-12-31`;
+  }else{
+    from=$("statsFrom").value; to=$("statsTo").value;
+  }
+  if(!from||!to){msg("Chọn khoảng ngày hợp lệ.");return}
+  let txs=appData.transactions.filter(t=>t.date>=from && t.date<=to && (t.type==="INCOME"||t.type==="EXPENSE"));
+  let exp={},inc={};
+  for(let t of txs){
+    if(t.type==="EXPENSE") exp[t.category]=(exp[t.category]||0)+t.amount;
+    else inc[t.category]=(inc[t.category]||0)+t.amount;
+  }
+  function bars(map,cls){
+    let entries=Object.entries(map).sort((a,b)=>b[1]-a[1]);
+    if(!entries.length) return '<div class="empty">Không có dữ liệu.</div>';
+    let max=entries[0][1]||1;
+    return entries.map(([k,v])=>`<div class="chart-bar">
+      <div class="label" title="${esc(k)}">${esc(k)}</div>
+      <div class="bar ${cls}"><i style="width:${Math.max(2,v/max*100)}%"></i></div>
+      <div class="val">${money(v)}</div>
+    </div>`).join("");
+  }
+  $("statsExpenseChart").innerHTML=bars(exp,"exp");
+  $("statsIncomeChart").innerHTML=bars(inc,"inc");
+}
+
+/* EVENTS */
 $("setupForm").onsubmit=async e=>{
   e.preventDefault();
   let p=$("setupPassword").value,p2=$("setupPassword2").value;
@@ -410,6 +531,15 @@ document.querySelectorAll(".clear").forEach(b=>b.onclick=()=>{
 $("lockBtn").onclick=lock;
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
 
+/* Search */
+$("txSearchBtn").onclick=()=>{
+  txFilter={kw:$("txSearchKw").value,from:$("txSearchFrom").value,to:$("txSearchTo").value};
+  txDisplayLimit=50;
+  renderTransactions();
+};
+$("txSearchKw").onkeydown=e=>{if(e.key==="Enter"){$("txSearchBtn").click()}};
+
+/* Transactions */
 $("addTransactionBtn").onclick=()=>showTxForm();
 $("cancelTransactionBtn").onclick=()=>$("transactionForm").classList.add("hidden");
 $("txType").onchange=fillCategoryOptions;
@@ -418,12 +548,14 @@ $("transactionForm").onsubmit=async e=>{
   e.preventDefault();
   let id=$("txId").value;
   let amount=Number(digits($("txAmount").value));
+  let date=$("txDate").value;
+  if(!ensureNotFuture(date)) return;
   if(!Number.isSafeInteger(amount)||amount<=0) return msg("Số tiền phải lớn hơn 0.");
   let item={
     id:id||uid(),
     type:$("txType").value,
     amount,
-    date:$("txDate").value,
+    date,
     accountId:$("txAccount").value,
     category:$("txCategory").value,
     note:$("txNote").value.trim(),
@@ -455,6 +587,7 @@ $("loadMoreBtn").onclick=()=>{
   renderTransactions();
 };
 
+/* Transfer */
 $("addTransferBtn").onclick=showTransferForm;
 $("cancelTransferBtn").onclick=()=>$("transferForm").classList.add("hidden");
 $("tfAmount").oninput=()=>moneyInput($("tfAmount"));
@@ -462,13 +595,15 @@ $("transferForm").onsubmit=async e=>{
   e.preventDefault();
   let from=$("tfFrom").value, to=$("tfTo").value;
   let amount=Number(digits($("tfAmount").value));
+  let date=$("tfDate").value;
+  if(!ensureNotFuture(date)) return;
   if(from===to) return msg("Hai tài khoản phải khác nhau.");
   if(!Number.isSafeInteger(amount)||amount<=0) return msg("Số tiền phải lớn hơn 0.");
   let item={
     id:uid(),
     type:"TRANSFER",
     amount,
-    date:$("tfDate").value,
+    date,
     accountId:from,
     toAccountId:to,
     category:"Chuyển khoản",
@@ -482,6 +617,7 @@ $("transferForm").onsubmit=async e=>{
   msg("Đã chuyển khoản thành công.");
 };
 
+/* Accounts */
 $("addAccountBtn").onclick=()=>{
   $("accountForm").reset();
   $("accountId").value="";
@@ -526,6 +662,7 @@ $("accountList").onclick=async e=>{
   }
 };
 
+/* Categories */
 $("addCategoryBtn").onclick=()=>$("categoryForm").classList.remove("hidden");
 $("cancelCategoryBtn").onclick=()=>$("categoryForm").classList.add("hidden");
 $("categoryForm").onsubmit=async e=>{
@@ -553,6 +690,7 @@ $("categoryList").onclick=async e=>{
   }
 };
 
+/* Budgets */
 $("budgetAmount").oninput=()=>moneyInput($("budgetAmount"));
 $("budgetForm").onsubmit=async e=>{
   e.preventDefault();
@@ -575,6 +713,7 @@ $("budgetList").onclick=async e=>{
   render();
 };
 
+/* Debts – logic with Vay nợ account */
 $("addDebtBtn").onclick=()=>{
   $("repayForm").classList.add("hidden");
   $("debtForm").reset();
@@ -592,10 +731,17 @@ $("debtForm").onsubmit=async e=>{
   let type=$("debtType").value;
   let person=$("debtPerson").value.trim();
   let amount=Number(digits($("debtAmount").value));
-  let accountId=$("debtAccount").value;
+  let walletId=$("debtAccount").value;
   let date=$("debtDate").value;
   let note=$("debtNote").value.trim();
+  if(!ensureNotFuture(date)) return;
   if(!person||!amount||amount<=0) return msg("Nhập đầy đủ thông tin hợp lệ.");
+  let debtAcc=getDebtAccount();
+  if(!debtAcc){
+    // auto create
+    debtAcc={id:uid(),name:"Vay nợ",type:"Vay nợ",openingBalance:0,active:true};
+    appData.accounts.push(debtAcc);
+  }
   let debtId=uid();
   appData.debts.push({
     id:debtId,
@@ -606,23 +752,39 @@ $("debtForm").onsubmit=async e=>{
     note,
     createdAt:new Date().toISOString()
   });
-  let txType= type==="CHO_VAY" ? "EXPENSE" : "INCOME";
-  let category= type==="CHO_VAY" ? "Cho vay" : "Vay nợ";
-  appData.transactions.push({
-    id:uid(),
-    type:txType,
-    amount,
-    date,
-    accountId,
-    category,
-    note: note || `${type==="CHO_VAY"?"Cho":"Vay"} ${person}`,
-    debtId,
-    createdAt:new Date().toISOString()
-  });
-  if(!appData.categories.EXPENSE.includes("Cho vay")) appData.categories.EXPENSE.push("Cho vay");
-  if(!appData.categories.EXPENSE.includes("Trả nợ")) appData.categories.EXPENSE.push("Trả nợ");
-  if(!appData.categories.INCOME.includes("Thu nợ")) appData.categories.INCOME.push("Thu nợ");
-  if(!appData.categories.INCOME.includes("Vay nợ")) appData.categories.INCOME.push("Vay nợ");
+
+  if(type==="VAY"){
+    // Vay nợ: money from debt account -> wallet (TRANSFER), then mark as income? 
+    // User: Tiền đi vay phải được chuyển từ tài khoản Vay nợ (trừ tiền) đến một tài khoản ví (cộng tiền)
+    // So create TRANSFER from Vay nợ account to wallet
+    appData.transactions.push({
+      id:uid(),
+      type:"TRANSFER",
+      amount,
+      date,
+      accountId:debtAcc.id,
+      toAccountId:walletId,
+      category:"Chuyển khoản",
+      note: note || `Vay từ ${person}`,
+      debtId,
+      createdAt:new Date().toISOString()
+    });
+    // also record as INCOME category Vay nợ on the wallet for tracking? Optional. Keep simple: transfer only + debt record.
+  }else{
+    // CHO_VAY: money leaves wallet to outside. Like expense, and optionally transfer concept.
+    // For consistency: EXPENSE from wallet "Cho vay"
+    appData.transactions.push({
+      id:uid(),
+      type:"EXPENSE",
+      amount,
+      date,
+      accountId:walletId,
+      category:"Cho vay",
+      note: note || `Cho ${person} vay`,
+      debtId,
+      createdAt:new Date().toISOString()
+    });
+  }
   await persist();
   render();
   $("debtForm").classList.add("hidden");
@@ -665,31 +827,74 @@ $("repayForm").onsubmit=async e=>{
   if(!d) return msg("Không tìm thấy khoản.");
   let amount=Number(digits($("repayAmount").value));
   let rem=debtRemaining(d);
+  let date=$("repayDate").value;
+  if(!ensureNotFuture(date)) return;
   if(!amount||amount<=0) return msg("Số tiền không hợp lệ.");
   if(amount>rem) return msg(`Số tiền vượt quá số còn lại (${money(rem)}).`);
-  let accountId=$("repayAccount").value;
-  let date=$("repayDate").value;
+  let walletId=$("repayAccount").value;
   let note=$("repayNote").value.trim();
-  let txType= d.type==="CHO_VAY" ? "INCOME" : "EXPENSE";
-  let category= d.type==="CHO_VAY" ? "Thu nợ" : "Trả nợ";
-  appData.transactions.push({
-    id:uid(),
-    type:txType,
-    amount,
-    date,
-    accountId,
-    category,
-    note: note || `${category} - ${d.person}`,
-    debtId,
-    createdAt:new Date().toISOString()
-  });
+  let debtAcc=getDebtAccount();
+  if(!debtAcc){
+    debtAcc={id:uid(),name:"Vay nợ",type:"Vay nợ",openingBalance:0,active:true};
+    appData.accounts.push(debtAcc);
+  }
+
+  if(d.type==="VAY"){
+    // Trả nợ: chuyển từ ví (trừ) đến tài khoản Vay nợ (cộng)
+    appData.transactions.push({
+      id:uid(),
+      type:"TRANSFER",
+      amount,
+      date,
+      accountId:walletId,
+      toAccountId:debtAcc.id,
+      category:"Chuyển khoản",
+      note: note || `Trả nợ ${d.person}`,
+      debtId,
+      createdAt:new Date().toISOString()
+    });
+    // also log as EXPENSE Trả nợ for category tracking
+    appData.transactions.push({
+      id:uid(),
+      type:"EXPENSE",
+      amount,
+      date,
+      accountId:walletId,
+      category:"Trả nợ",
+      note: note || `Trả nợ ${d.person}`,
+      debtId,
+      createdAt:new Date().toISOString()
+    });
+  }else{
+    // Thu nợ (CHO_VAY): money comes into wallet = INCOME Thu nợ
+    appData.transactions.push({
+      id:uid(),
+      type:"INCOME",
+      amount,
+      date,
+      accountId:walletId,
+      category:"Thu nợ",
+      note: note || `Thu nợ từ ${d.person}`,
+      debtId,
+      createdAt:new Date().toISOString()
+    });
+  }
   await persist();
   render();
   $("repayForm").classList.add("hidden");
   msg("Đã ghi nhận " + (d.type==="CHO_VAY"?"thu nợ":"trả nợ") + ".");
 };
 
+/* Stats */
+$("statsMode").onchange=()=>{
+  let y=$("statsMode").value==="year";
+  $("statsYearWrap").classList.toggle("hidden",!y);
+};
+$("statsRunBtn").onclick=runStats;
+
+/* Backup */
 $("exportBackupBtn").onclick=()=>exportBackup().catch(e=>msg(e.message));
+$("exportBackupBtn2").onclick=()=>exportBackup().catch(e=>msg(e.message));
 $("importBackupBtn").onclick=()=>importBackup($("backupFile").files[0]).catch(e=>msg("Khôi phục thất bại: "+e.message));
 $("exportCsvBtn").onclick=()=>exportCsv();
 $("copyTxBtn").onclick=()=>copyTransactionsTable();
