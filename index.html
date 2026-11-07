@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="description" content="Ứng dụng quản lý tài chính cá nhân chạy offline">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <title>Tài chính cá nhân</title>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">LOCAL-FIRST · OFFLINE</div>
+      <h1>Tài chính cá nhân</h1>
+    </div>
+    <button id="lockBtn" class="secondary hidden">Khóa ứng dụng</button>
+  </header>
+
+  <main>
+    <section id="setupPanel" class="panel narrow hidden">
+      <h2>Tạo kho dữ liệu riêng</h2>
+      <p>Dữ liệu được mã hóa trên thiết bị. Hãy đặt mật khẩu dài và lưu ở nơi an toàn. Nếu quên mật khẩu, không thể khôi phục dữ liệu nếu không có bản sao lưu và mật khẩu đúng.</p>
+      <form id="setupForm">
+        <label>Mật khẩu chính
+          <input id="setupPassword" type="password" minlength="10" autocomplete="new-password" required placeholder="Ít nhất 10 ký tự">
+        </label>
+        <label>Nhập lại mật khẩu
+          <input id="setupPassword2" type="password" minlength="10" autocomplete="new-password" required>
+        </label>
+        <button class="primary" type="submit">Tạo kho dữ liệu</button>
+      </form>
+    </section>
+
+    <section id="unlockPanel" class="panel narrow hidden">
+      <h2>Mở khóa dữ liệu</h2>
+      <p>Nhập mật khẩu chính để giải mã dữ liệu trên thiết bị này.</p>
+      <form id="unlockForm">
+        <label>Mật khẩu
+          <input id="unlockPassword" type="password" autocomplete="current-password" required>
+        </label>
+        <button class="primary" type="submit">Mở khóa</button>
+      </form>
+      <p id="unlockError" class="error" role="alert"></p>
+    </section>
+
+    <section id="appPanel" class="hidden">
+      <section class="summary-grid">
+        <article class="summary-card"><span>Tổng thu</span><strong id="incomeTotal">0 ₫</strong></article>
+        <article class="summary-card"><span>Tổng chi</span><strong id="expenseTotal">0 ₫</strong></article>
+        <article class="summary-card"><span>Số dư ròng</span><strong id="netTotal">0 ₫</strong></article>
+      </section>
+
+      <nav class="tabs" aria-label="Điều hướng">
+        <button class="tab active" data-tab="transactions">Giao dịch</button>
+        <button class="tab" data-tab="accounts">Tài khoản</button>
+        <button class="tab" data-tab="backup">Sao lưu</button>
+      </nav>
+
+      <section id="transactionsView" class="view">
+        <div class="section-heading">
+          <div><h2>Giao dịch</h2><p>Thu nhập và chi tiêu trên thiết bị này</p></div>
+          <button id="addTransactionBtn" class="primary">＋ Thêm giao dịch</button>
+        </div>
+        <form id="transactionForm" class="panel form-grid hidden">
+          <label>Loại giao dịch
+            <select id="txType"><option value="EXPENSE">Chi tiêu</option><option value="INCOME">Thu nhập</option></select>
+          </label>
+          <label>Số tiền (VND)
+            <input id="txAmount" type="number" min="1" step="1" required placeholder="Ví dụ: 150000">
+          </label>
+          <label>Ngày
+            <input id="txDate" type="date" required>
+          </label>
+          <label>Tài khoản
+            <select id="txAccount" required></select>
+          </label>
+          <label>Danh mục
+            <input id="txCategory" maxlength="60" placeholder="Ví dụ: Ăn uống" required>
+          </label>
+          <label class="wide">Ghi chú
+            <input id="txNote" maxlength="250" placeholder="Không bắt buộc">
+          </label>
+          <div class="form-actions wide">
+            <button type="button" id="cancelTransactionBtn" class="secondary">Hủy</button>
+            <button type="submit" class="primary">Lưu giao dịch</button>
+          </div>
+        </form>
+        <div id="transactionList" class="list panel"></div>
+      </section>
+
+      <section id="accountsView" class="view hidden">
+        <div class="section-heading">
+          <div><h2>Tài khoản tiền</h2><p>Tiền mặt, ngân hàng, ví điện tử</p></div>
+          <button id="addAccountBtn" class="primary">＋ Thêm tài khoản</button>
+        </div>
+        <form id="accountForm" class="panel form-grid hidden">
+          <label>Tên tài khoản
+            <input id="accountName" maxlength="60" required placeholder="Ví dụ: Tiền mặt">
+          </label>
+          <label>Loại
+            <select id="accountType"><option>Tiền mặt</option><option>Ngân hàng</option><option>Ví điện tử</option><option>Tiết kiệm</option></select>
+          </label>
+          <div class="form-actions wide">
+            <button type="button" id="cancelAccountBtn" class="secondary">Hủy</button>
+            <button type="submit" class="primary">Lưu tài khoản</button>
+          </div>
+        </form>
+        <div id="accountList" class="list panel"></div>
+      </section>
+
+      <section id="backupView" class="view hidden">
+        <div class="section-heading"><div><h2>Sao lưu & khôi phục</h2><p>Bản sao lưu được mã hóa bằng mật khẩu chính</p></div></div>
+        <div class="panel backup-panel">
+          <h3>Sao lưu dữ liệu</h3>
+          <p>Tạo một file mã hóa chứa dữ liệu ứng dụng. Cất file ở USB hoặc ổ cứng riêng.</p>
+          <button id="exportBackupBtn" class="primary">Tải file sao lưu</button>
+          <hr>
+          <h3>Khôi phục dữ liệu</h3>
+          <p>Khôi phục sẽ thay thế dữ liệu hiện tại trên thiết bị này. Hãy sao lưu dữ liệu hiện tại trước khi tiếp tục.</p>
+          <label>Chọn file .pfbackup
+            <input id="backupFile" type="file" accept=".pfbackup,.json,application/json">
+          </label>
+          <button id="importBackupBtn" class="secondary">Kiểm tra và khôi phục</button>
+        </div>
+      </section>
+      <p class="privacy-note"><span class="dot"></span> Dữ liệu lưu cục bộ và được mã hóa. Ứng dụng không gửi dữ liệu tài chính lên máy chủ.</p>
+    </section>
+
+    <section id="message" class="message hidden" role="status"></section>
+  </main>
+  <footer>Phiên bản khởi đầu · Dữ liệu mẫu chưa có · Hãy sao lưu định kỳ</footer>
+  <script src="./app.js"></script>
+</body>
+</html>
