@@ -1,225 +1,60 @@
-const DB_NAME = "personal-finance-local";
-const DB_VERSION = 1;
-const STORE = "vault";
-const BACKUP_FORMAT = "PFLOCAL_BACKUP";
-const PBKDF2_ITERATIONS = 310000;
-let db;
-let cryptoKey = null;
-let appData = null;
-let messageTimer;
-
-const $ = (id) => document.getElementById(id);
-const money = (n) => new Intl.NumberFormat("vi-VN", {style:"currency",currency:"VND",maximumFractionDigits:0}).format(n || 0);
-const today = () => new Date().toISOString().slice(0,10);
-const uid = () => crypto.randomUUID();
-
-function openDb() {
-  return new Promise((resolve,reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-function readVault() {
-  return new Promise((resolve,reject) => {
-    const tx = db.transaction(STORE,"readonly");
-    const req = tx.objectStore(STORE).get("main");
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
-  });
-}
-function writeVault(value) {
-  return new Promise((resolve,reject) => {
-    const tx = db.transaction(STORE,"readwrite");
-    tx.objectStore(STORE).put(value,"main");
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
-}
-function bytesToBase64(bytes) {
-  let binary = "";
-  bytes.forEach(b => binary += String.fromCharCode(b));
-  return btoa(binary);
-}
-function base64ToBytes(value) {
-  const binary = atob(value);
-  return Uint8Array.from(binary, c => c.charCodeAt(0));
-}
-async function deriveKey(password,salt) {
-  const material = await crypto.subtle.importKey("raw",new TextEncoder().encode(password),"PBKDF2",false,["deriveKey"]);
-  return crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations:PBKDF2_ITERATIONS,hash:"SHA-256"},material,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
-}
-async function encryptData(data,key) {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encoded = new TextEncoder().encode(JSON.stringify(data));
-  const cipher = await crypto.subtle.encrypt({name:"AES-GCM",iv},key,encoded);
-  return {iv:bytesToBase64(iv),ciphertext:bytesToBase64(new Uint8Array(cipher))};
-}
-async function decryptData(envelope,key) {
-  const plain = await crypto.subtle.decrypt({name:"AES-GCM",iv:base64ToBytes(envelope.iv)},key,base64ToBytes(envelope.ciphertext));
-  return JSON.parse(new TextDecoder().decode(plain));
-}
-async function persist() {
-  const encrypted = await encryptData(appData,cryptoKey);
-  await writeVault({version:1,salt:window.localSalt,iv:encrypted.iv,ciphertext:encrypted.ciphertext,updatedAt:new Date().toISOString()});
-}
-function showMessage(text) {
-  $("message").textContent = text;
-  $("message").classList.remove("hidden");
-  clearTimeout(messageTimer);
-  messageTimer = setTimeout(() => $("message").classList.add("hidden"),3000);
-}
-function showOnly(id) {
-  ["setupPanel","unlockPanel","appPanel"].forEach(x => $(x).classList.toggle("hidden",x!==id));
-}
-function defaultData() {
-  return {
-    schemaVersion:1,
-    currency:"VND",
-    accounts:[{id:uid(),name:"Tiền mặt",type:"Tiền mặt",openingBalance:0,active:true}],
-    transactions:[],
-    categories:{INCOME:["Lương","Thưởng","Thu khác"],EXPENSE:["Ăn uống","Di chuyển","Nhà cửa","Mua sắm","Y tế","Chi khác"]},
-    createdAt:new Date().toISOString()
-  };
-}
-async function setup(password) {
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  window.localSalt = bytesToBase64(salt);
-  cryptoKey = await deriveKey(password,salt);
-  appData = defaultData();
-  await persist();
-  showOnly("appPanel");
-  $("lockBtn").classList.remove("hidden");
-  render();
-}
-async function unlock(password) {
-  const vault = await readVault();
-  if (!vault) throw new Error("Chưa có dữ liệu.");
-  window.localSalt = vault.salt;
-  cryptoKey = await deriveKey(password,base64ToBytes(vault.salt));
-  appData = await decryptData(vault,cryptoKey);
-  showOnly("appPanel");
-  $("lockBtn").classList.remove("hidden");
-  render();
-}
-function lock() {
-  cryptoKey = null;
-  appData = null;
-  $("lockBtn").classList.add("hidden");
-  $("unlockPassword").value = "";
-  showOnly("unlockPanel");
-}
-function render() {
-  const income = appData.transactions.filter(t=>t.type==="INCOME").reduce((s,t)=>s+t.amount,0);
-  const expense = appData.transactions.filter(t=>t.type==="EXPENSE").reduce((s,t)=>s+t.amount,0);
-  const opening = appData.accounts.reduce((s,a)=>s+(a.openingBalance||0),0);
-  $("incomeTotal").textContent = money(income);
-  $("expenseTotal").textContent = money(expense);
-  $("netTotal").textContent = money(opening+income-expense);
-  renderAccounts();
-  renderTransactions();
-  const select = $("txAccount");
-  select.innerHTML = appData.accounts.filter(a=>a.active).map(a=>`<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("");
-}
-function renderTransactions() {
-  const list = $("transactionList");
-  const items = [...appData.transactions].sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt));
-  if (!items.length) { list.innerHTML = '<div class="empty">Chưa có giao dịch. Bấm “Thêm giao dịch” để bắt đầu.</div>'; return; }
-  list.innerHTML = items.map(t => {
-    const account = appData.accounts.find(a=>a.id===t.accountId);
-    const sign = t.type==="INCOME"?"+":"−";
-    return `<div class="list-row"><div><div class="item-title">${escapeHtml(t.category)}</div><div class="item-sub">${escapeHtml(t.date)} · ${escapeHtml(account?.name||"Tài khoản đã xóa")}${t.note?" · "+escapeHtml(t.note):""}</div></div><div class="amount ${t.type==="INCOME"?"income":"expense"}">${sign}${money(t.amount)}</div></div>`;
-  }).join("");
-}
-function renderAccounts() {
-  const list = $("accountList");
-  list.innerHTML = appData.accounts.map(a => {
-    const movement = appData.transactions.filter(t=>t.accountId===a.id).reduce((s,t)=>s+(t.type==="INCOME"?t.amount:-t.amount),0);
-    return `<div class="list-row"><div><div class="item-title">${escapeHtml(a.name)}</div><div class="item-sub">${escapeHtml(a.type)}</div></div><div class="amount">${money((a.openingBalance||0)+movement)}</div></div>`;
-  }).join("") || '<div class="empty">Chưa có tài khoản.</div>';
-}
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-}
-function switchTab(tab) {
-  document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
-  ["transactions","accounts","backup"].forEach(v=>$(`${v}View`).classList.toggle("hidden",v!==tab));
-}
-function downloadBlob(blob,name) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a"); a.href=url; a.download=name; a.click();
-  setTimeout(()=>URL.revokeObjectURL(url),1000);
-}
-async function exportBackup() {
-  const vault = await readVault();
-  const payload = {format:BACKUP_FORMAT,formatVersion:1,createdAt:new Date().toISOString(),vault};
-  downloadBlob(new Blob([JSON.stringify(payload)],{type:"application/json"}),`TaiChinhCaNhan_${today()}.pfbackup`);
-  showMessage("Đã tạo file sao lưu mã hóa.");
-}
-async function importBackup(file) {
-  if (!file) throw new Error("Hãy chọn file sao lưu.");
-  const payload = JSON.parse(await file.text());
-  if (payload.format!==BACKUP_FORMAT || payload.formatVersion!==1 || !payload.vault?.ciphertext) throw new Error("File sao lưu không đúng định dạng hoặc không được hỗ trợ.");
-  const password = prompt("Nhập mật khẩu chính của file sao lưu:");
-  if (!password) return;
-  const key = await deriveKey(password,base64ToBytes(payload.vault.salt));
-  const restored = await decryptData(payload.vault,key); // verify before replacing current data
-  if (!restored || restored.schemaVersion!==1 || !Array.isArray(restored.accounts) || !Array.isArray(restored.transactions)) throw new Error("Dữ liệu trong file không hợp lệ.");
-  if (!confirm("Khôi phục sẽ thay thế toàn bộ dữ liệu hiện tại trên thiết bị này. Tiếp tục?")) return;
-  await writeVault(payload.vault);
-  cryptoKey = key;
-  window.localSalt = payload.vault.salt;
-  appData = restored;
-  render();
-  showMessage("Đã khôi phục dữ liệu thành công.");
-}
-async function init() {
-  if (!window.crypto?.subtle || !window.indexedDB) {
-    document.body.innerHTML = "<main><h2>Thiết bị hoặc trình duyệt chưa hỗ trợ các tính năng bảo mật cần thiết.</h2><p>Hãy dùng trình duyệt hiện đại và mở ứng dụng qua HTTPS hoặc localhost.</p></main>";
-    return;
-  }
-  db = await openDb();
-  const vault = await readVault();
-  showOnly(vault?"unlockPanel":"setupPanel");
-  if ("serviceWorker" in navigator && (location.protocol==="https:" || location.hostname==="localhost")) {
-    navigator.serviceWorker.register("./sw.js").catch(()=>{});
-  }
-}
-$("setupForm").addEventListener("submit",async e=>{
-  e.preventDefault();
-  const p=$("setupPassword").value, p2=$("setupPassword2").value;
-  if(p.length<10) return showMessage("Mật khẩu cần ít nhất 10 ký tự.");
-  if(p!==p2) return showMessage("Hai mật khẩu không khớp.");
-  try { await setup(p); showMessage("Đã tạo kho dữ liệu trên thiết bị."); } catch(err) { showMessage("Không thể tạo dữ liệu: "+err.message); }
-});
-$("unlockForm").addEventListener("submit",async e=>{
-  e.preventDefault(); $("unlockError").textContent="";
-  try { await unlock($("unlockPassword").value); showMessage("Đã mở khóa."); }
-  catch(err) { $("unlockError").textContent="Không mở được dữ liệu. Có thể mật khẩu không đúng hoặc file dữ liệu bị lỗi."; }
-});
-$("lockBtn").addEventListener("click",lock);
-document.querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>switchTab(b.dataset.tab)));
-$("addTransactionBtn").addEventListener("click",()=>{$("transactionForm").classList.remove("hidden");$("txDate").value=today();});
-$("cancelTransactionBtn").addEventListener("click",()=>$("transactionForm").classList.add("hidden"));
-$("transactionForm").addEventListener("submit",async e=>{
-  e.preventDefault();
-  const amount=Number($("txAmount").value);
-  if(!Number.isSafeInteger(amount)||amount<=0) return showMessage("Số tiền phải là số nguyên dương.");
-  appData.transactions.push({id:uid(),type:$("txType").value,amount,date:$("txDate").value,accountId:$("txAccount").value,category:$("txCategory").value.trim(),note:$("txNote").value.trim(),createdAt:new Date().toISOString()});
-  try { await persist(); render(); $("transactionForm").reset(); $("transactionForm").classList.add("hidden"); showMessage("Đã lưu giao dịch."); }
-  catch(err) { showMessage("Lỗi lưu dữ liệu: "+err.message); }
-});
-$("addAccountBtn").addEventListener("click",()=>$("accountForm").classList.remove("hidden"));
-$("cancelAccountBtn").addEventListener("click",()=>$("accountForm").classList.add("hidden"));
-$("accountForm").addEventListener("submit",async e=>{
-  e.preventDefault();
-  const name=$("accountName").value.trim();
-  if(!name) return;
-  appData.accounts.push({id:uid(),name,type:$("accountType").value,openingBalance:0,active:true});
-  await persist(); render(); $("accountForm").reset(); $("accountForm").classList.add("hidden"); showMessage("Đã thêm tài khoản.");
-});
-$("exportBackupBtn").addEventListener("click",()=>exportBackup().catch(e=>showMessage("Không thể sao lưu: "+e.message)));
-$("importBackupBtn").addEventListener("click",()=>importBackup($("backupFile").files[0]).catch(e=>showMessage("Khôi phục thất bại: "+e.message)));
-init().catch(err=>{console.error(err);showMessage("Không thể khởi tạo ứng dụng: "+err.message);});
+const DB_NAME="personal-finance-local",STORE="vault",BACKUP_FORMAT="PFLOCAL_BACKUP",ITER=310000;
+let db,cryptoKey=null,appData=null,messageTimer;
+const $=id=>document.getElementById(id), uid=()=>crypto.randomUUID(), today=()=>new Date().toISOString().slice(0,10);
+const money=n=>new Intl.NumberFormat("vi-VN",{maximumFractionDigits:0}).format(n||0)+" ₫";
+const fmt=n=>new Intl.NumberFormat("vi-VN",{maximumFractionDigits:0}).format(n||0);
+const digits=s=>String(s||"").replace(/\D/g,"");
+function openDb(){return new Promise((res,rej)=>{let r=indexedDB.open(DB_NAME,1);r.onupgradeneeded=()=>r.result.createObjectStore(STORE);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+function readVault(){return new Promise((res,rej)=>{let r=db.transaction(STORE).objectStore(STORE).get("main");r.onsuccess=()=>res(r.result||null);r.onerror=()=>rej(r.error)})}
+function writeVault(v){return new Promise((res,rej)=>{let t=db.transaction(STORE,"readwrite");t.objectStore(STORE).put(v,"main");t.oncomplete=res;t.onerror=()=>rej(t.error)})}
+function b64(b){return btoa(String.fromCharCode(...b))}
+function un64(s){return Uint8Array.from(atob(s),c=>c.charCodeAt(0))}
+async function derive(p,s){let m=await crypto.subtle.importKey("raw",new TextEncoder().encode(p),"PBKDF2",false,["deriveKey"]);return crypto.subtle.deriveKey({name:"PBKDF2",salt:s,iterations:ITER,hash:"SHA-256"},m,{name:"AES-GCM",length:256},false,["encrypt","decrypt"])}
+async function enc(d,k){let iv=crypto.getRandomValues(new Uint8Array(12)),c=await crypto.subtle.encrypt({name:"AES-GCM",iv},k,new TextEncoder().encode(JSON.stringify(d)));return{iv:b64(iv),ciphertext:b64(new Uint8Array(c))}}
+async function dec(v,k){return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:"AES-GCM",iv:un64(v.iv)},k,un64(v.ciphertext))))}
+async function persist(){let e=await enc(appData,cryptoKey);await writeVault({version:1,salt:window.localSalt,iv:e.iv,ciphertext:e.ciphertext,updatedAt:new Date().toISOString()})}
+function msg(s){$("message").textContent=s;$("message").classList.remove("hidden");clearTimeout(messageTimer);messageTimer=setTimeout(()=>$("message").classList.add("hidden"),3500)}
+function showOnly(id){["setupPanel","unlockPanel","appPanel"].forEach(x=>$(x).classList.toggle("hidden",x!==id))}
+function defaults(){return{schemaVersion:2,accounts:[{id:uid(),name:"Tiền mặt",type:"Tiền mặt",openingBalance:0,active:true},{id:uid(),name:"Ngân hàng",type:"Ngân hàng",openingBalance:0,active:true},{id:uid(),name:"Ví điện tử",type:"Ví điện tử",openingBalance:0,active:true}],transactions:[],categories:{INCOME:["Lương","Thưởng","Thu khác"],EXPENSE:["Ăn uống","Di chuyển","Nhà cửa","Hóa đơn","Mua sắm","Y tế","Giải trí","Giáo dục","Chi khác"]},budgets:[],createdAt:new Date().toISOString()}}
+function normalize(d){let x=defaults();return{...x,...d,schemaVersion:2,accounts:d.accounts||x.accounts,transactions:d.transactions||[],categories:{INCOME:d.categories?.INCOME||x.categories.INCOME,EXPENSE:d.categories?.EXPENSE||x.categories.EXPENSE},budgets:d.budgets||[]}}
+async function setup(p){let s=crypto.getRandomValues(new Uint8Array(16));window.localSalt=b64(s);cryptoKey=await derive(p,s);appData=defaults();await persist();showOnly("appPanel");$("lockBtn").classList.remove("hidden");render()}
+async function unlock(p){let v=await readVault();window.localSalt=v.salt;cryptoKey=await derive(p,un64(v.salt));appData=normalize(await dec(v,cryptoKey));await persist();showOnly("appPanel");$("lockBtn").classList.remove("hidden");render()}
+function lock(){cryptoKey=appData=null;$("lockBtn").classList.add("hidden");$("unlockPassword").value="";showOnly("unlockPanel")}
+function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function txTotal(type){return appData.transactions.filter(t=>t.type===type).reduce((s,t)=>s+t.amount,0)}
+function render(){let inc=txTotal("INCOME"),out=txTotal("EXPENSE"),opening=appData.accounts.reduce((s,a)=>s+(a.openingBalance||0),0);$("incomeTotal").textContent=money(inc);$("expenseTotal").textContent=money(out);$("netTotal").textContent=money(opening+inc-out);renderAccounts();renderTransactions();renderCategories();renderBudgetOptions();renderBudgets();fillAccountOptions();fillCategoryOptions()}
+function renderTransactions(){let rows=[...appData.transactions].sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt));$("transactionList").innerHTML=rows.length?rows.map(t=>{let a=appData.accounts.find(x=>x.id===t.accountId);return `<div class="list-row"><div class="grow"><b>${esc(t.category)}</b><small>${esc(t.date)} · ${esc(a?.name||"Tài khoản đã xóa")}${t.note?" · "+esc(t.note):""}</small></div><strong class="amount ${t.type==="INCOME"?"income":"expense"}">${t.type==="INCOME"?"+":"−"}${money(t.amount)}</strong><div class="actions"><button data-edit-tx="${t.id}" class="tiny">Sửa</button><button data-del-tx="${t.id}" class="tiny danger">Xóa</button></div></div>`}).join(""):'<div class="empty">Chưa có giao dịch.</div>'}
+function renderAccounts(){let q=$("accountSearch").value.toLowerCase();let arr=appData.accounts.filter(a=>a.name.toLowerCase().includes(q));$("accountList").innerHTML=arr.map(a=>{let bal=(a.openingBalance||0)+appData.transactions.filter(t=>t.accountId===a.id).reduce((s,t)=>s+(t.type==="INCOME"?t.amount:-t.amount),0);return `<div class="list-row"><div class="grow"><b>${esc(a.name)}</b><small>${esc(a.type)}</small></div><strong>${money(bal)}</strong><div class="actions"><button class="tiny" data-edit-account="${a.id}">Sửa</button><button class="tiny danger" data-del-account="${a.id}">Xóa</button></div></div>`}).join("")||'<div class="empty">Không tìm thấy tài khoản.</div>'}
+function renderCategories(){let out=[];for(let type of ["EXPENSE","INCOME"])for(let name of appData.categories[type])out.push(`<div class="list-row"><div class="grow"><b>${esc(name)}</b><small>${type==="EXPENSE"?"Chi tiêu":"Thu nhập"}</small></div><button class="tiny danger" data-del-category="${type}|${encodeURIComponent(name)}">Xóa</button></div>`);$("categoryList").innerHTML=out.join("")}
+function fillAccountOptions(){let s=$("txAccount"),old=s.value;s.innerHTML=appData.accounts.map(a=>`<option value="${a.id}">${esc(a.name)}</option>`).join("");if([...s.options].some(o=>o.value===old))s.value=old}
+function fillCategoryOptions(){let type=$("txType").value,s=$("txCategory"),old=s.value;s.innerHTML=(appData.categories[type]||[]).map(c=>`<option>${esc(c)}</option>`).join("");if([...s.options].some(o=>o.value===old))s.value=old}
+function renderBudgetOptions(){let s=$("budgetCategory"),old=s.value;s.innerHTML=appData.categories.EXPENSE.map(c=>`<option>${esc(c)}</option>`).join("");if([...s.options].some(o=>o.value===old))s.value=old}
+function monthNow(){return today().slice(0,7)}
+function renderBudgets(){let m=monthNow();$("budgetList").innerHTML=appData.budgets.map(b=>{let spent=appData.transactions.filter(t=>t.type==="EXPENSE"&&t.category===b.category&&t.date.startsWith(m)).reduce((s,t)=>s+t.amount,0),pct=b.amount?spent/b.amount*100:0,warning=pct>=100?"Đã vượt hạn mức":pct>=80?"Sắp chạm hạn mức":"Trong hạn mức";return `<div class="budget-item"><div class="row-between"><b>${esc(b.category)}</b><button class="tiny danger" data-del-budget="${encodeURIComponent(b.category)}">Xóa</button></div><div>${money(spent)} / ${money(b.amount)}</div><div class="progress"><i style="width:${Math.min(100,pct)}%"></i></div><small class="${pct>=80?"warning":""}">${warning} · ${Math.round(pct)}%</small></div>`}).join("")||'<div class="empty">Chưa đặt hạn mức nào.</div>'}
+function switchTab(t){document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===t));["transactions","accounts","categories","budgets","backup"].forEach(v=>$(`${v}View`).classList.toggle("hidden",v!==t))}
+function showTxForm(t){$("transactionForm").classList.remove("hidden");$("txFormTitle").textContent=t?"Sửa giao dịch":"Thêm giao dịch";$("txId").value=t?.id||"";$("txType").value=t?.type||"EXPENSE";fillCategoryOptions();$("txAmount").value=t?fmt(t.amount):"";$("txDate").value=t?.date||today();fillAccountOptions();$("txAccount").value=t?.accountId||appData.accounts[0]?.id||"";$("txCategory").value=t?.category||$("txCategory").value;$("txNote").value=t?.note||"";$("transactionForm").scrollIntoView({behavior:"smooth",block:"start"})}
+function moneyInput(el){let n=digits(el.value);el.value=n?fmt(Number(n)):""}
+function download(blob,name){let u=URL.createObjectURL(blob),a=document.createElement("a");a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
+async function exportBackup(){let v=await readVault();download(new Blob([JSON.stringify({format:BACKUP_FORMAT,formatVersion:1,createdAt:new Date().toISOString(),vault:v})],{type:"application/json"}),`TaiChinhCaNhan_${today()}.pfbackup`);msg("Đã tạo file sao lưu mã hóa.")}
+async function importBackup(file){if(!file)throw Error("Hãy chọn file sao lưu.");let p=JSON.parse(await file.text());if(p.format!==BACKUP_FORMAT||!p.vault?.ciphertext)throw Error("File sao lưu không hợp lệ.");let pin=prompt("Nhập PIN/mật khẩu của file sao lưu:");if(!pin)return;let k=await derive(pin,un64(p.vault.salt)),d=normalize(await dec(p.vault,k));if(!confirm("Khôi phục sẽ thay thế dữ liệu hiện tại. Tiếp tục?"))return;await writeVault(p.vault);cryptoKey=k;window.localSalt=p.vault.salt;appData=d;render();msg("Đã khôi phục dữ liệu.")}
+$("setupForm").onsubmit=async e=>{e.preventDefault();let p=$("setupPassword").value,p2=$("setupPassword2").value;if(!/^\d{4,}$/.test(p))return msg("PIN phải gồm ít nhất 4 chữ số.");if(p!==p2)return msg("Hai PIN không khớp.");try{await setup(p);msg("Đã tạo kho dữ liệu.")}catch(x){msg(x.message)}};
+$("unlockForm").onsubmit=async e=>{e.preventDefault();try{await unlock($("unlockPassword").value);msg("Đã mở khóa.")}catch(x){$("unlockError").textContent="Không mở được dữ liệu. Kiểm tra lại PIN/mật khẩu."}};
+document.querySelectorAll(".peek").forEach(b=>b.onclick=()=>{let x=$(b.dataset.target);x.type=x.type==="password"?"text":"password";b.textContent=x.type==="password"?"Hiện":"Ẩn"});
+document.querySelectorAll(".clear").forEach(b=>b.onclick=()=>{$(b.dataset.target).value="";$(b.dataset.target).focus()});
+$("lockBtn").onclick=lock;document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>switchTab(b.dataset.tab));
+$("addTransactionBtn").onclick=()=>showTxForm();$("cancelTransactionBtn").onclick=()=>$("transactionForm").classList.add("hidden");
+$("txType").onchange=fillCategoryOptions;$("txAmount").oninput=()=>moneyInput($("txAmount"));
+$("transactionForm").onsubmit=async e=>{e.preventDefault();let id=$("txId").value,amount=Number(digits($("txAmount").value));if(!Number.isSafeInteger(amount)||amount<=0)return msg("Số tiền phải lớn hơn 0.");let item={id:id||uid(),type:$("txType").value,amount,date:$("txDate").value,accountId:$("txAccount").value,category:$("txCategory").value,note:$("txNote").value.trim(),createdAt:new Date().toISOString()};if(id)appData.transactions=appData.transactions.map(t=>t.id===id?{...t,...item}:t);else appData.transactions.push(item);await persist();render();$("transactionForm").classList.add("hidden");msg(id?"Đã cập nhật giao dịch.":"Đã lưu giao dịch.")};
+$("transactionList").onclick=async e=>{let ed=e.target.dataset.editTx,del=e.target.dataset.delTx;if(ed){showTxForm(appData.transactions.find(t=>t.id===ed));return}if(del&&confirm("Xóa giao dịch này?")){appData.transactions=appData.transactions.filter(t=>t.id!==del);await persist();render();msg("Đã xóa giao dịch.")}};
+$("addAccountBtn").onclick=()=>{$("accountForm").reset();$("accountId").value="";$("accountFormTitle").textContent="Thêm tài khoản";$("accountForm").classList.remove("hidden")};$("cancelAccountBtn").onclick=()=>$("accountForm").classList.add("hidden");$("accountSearch").oninput=renderAccounts;
+$("accountForm").onsubmit=async e=>{e.preventDefault();let id=$("accountId").value,name=$("accountName").value.trim();if(id){let a=appData.accounts.find(a=>a.id===id);a.name=name;a.type=$("accountType").value}else appData.accounts.push({id:uid(),name,type:$("accountType").value,openingBalance:0,active:true});await persist();render();$("accountForm").classList.add("hidden");msg("Đã lưu tài khoản.")};
+$("accountList").onclick=async e=>{let ed=e.target.dataset.editAccount,del=e.target.dataset.delAccount;if(ed){let a=appData.accounts.find(a=>a.id===ed);$("accountId").value=a.id;$("accountName").value=a.name;$("accountType").value=a.type;$("accountFormTitle").textContent="Sửa tài khoản";$("accountForm").classList.remove("hidden");return}if(del){if(appData.transactions.some(t=>t.accountId===del))return alert("Tài khoản đang có giao dịch. Hãy sửa/xóa các giao dịch liên quan trước.");if(confirm("Xóa tài khoản này?")){appData.accounts=appData.accounts.filter(a=>a.id!==del);await persist();render()}}};
+$("addCategoryBtn").onclick=()=>$("categoryForm").classList.remove("hidden");$("cancelCategoryBtn").onclick=()=>$("categoryForm").classList.add("hidden");
+$("categoryForm").onsubmit=async e=>{e.preventDefault();let n=$("categoryName").value.trim(),t=$("categoryType").value;if(!n)return;if(appData.categories[t].some(x=>x.toLowerCase()===n.toLowerCase()))return msg("Danh mục đã tồn tại.");appData.categories[t].push(n);await persist();render();$("categoryForm").reset();$("categoryForm").classList.add("hidden");msg("Đã thêm danh mục.")};
+$("categoryList").onclick=async e=>{let v=e.target.dataset.delCategory;if(!v)return;let [t,encoded]=v.split("|"),n=decodeURIComponent(encoded);if(appData.transactions.some(x=>x.type===t&&x.category===n))return alert("Danh mục đã được dùng trong giao dịch, không thể xóa.");if(confirm(`Xóa danh mục "${n}"?`)){appData.categories[t]=appData.categories[t].filter(x=>x!==n);await persist();render()}};
+$("budgetAmount").oninput=()=>moneyInput($("budgetAmount"));
+$("budgetForm").onsubmit=async e=>{e.preventDefault();let c=$("budgetCategory").value,a=Number(digits($("budgetAmount").value));if(!c||!a)return msg("Nhập hạn mức hợp lệ.");let old=appData.budgets.find(x=>x.category===c);if(old)old.amount=a;else appData.budgets.push({category:c,amount:a});await persist();render();$("budgetAmount").value="";msg("Đã lưu hạn mức.")};
+$("budgetList").onclick=async e=>{let c=e.target.dataset.delBudget;if(!c)return;c=decodeURIComponent(c);appData.budgets=appData.budgets.filter(x=>x.category!==c);await persist();render()};
+$("exportBackupBtn").onclick=()=>exportBackup().catch(e=>msg(e.message));$("importBackupBtn").onclick=()=>importBackup($("backupFile").files[0]).catch(e=>msg("Khôi phục thất bại: "+e.message));
+async function init(){if(!crypto?.subtle||!indexedDB){document.body.innerHTML="<p>Trình duyệt không hỗ trợ lưu trữ/mã hóa cần thiết.</p>";return}db=await openDb();showOnly(await readVault()?"unlockPanel":"setupPanel");if("serviceWorker"in navigator&&(location.protocol==="https:"||location.hostname==="localhost"))navigator.serviceWorker.register("./sw.js").catch(()=>{})}
+init().catch(e=>msg("Không thể khởi tạo: "+e.message));

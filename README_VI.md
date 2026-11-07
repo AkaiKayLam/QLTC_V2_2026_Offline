@@ -1,43 +1,28 @@
-# Tài chính cá nhân Offline – bản khởi đầu
+# Tài chính cá nhân offline – bản nâng cấp thử nghiệm
 
-Đây là bộ khung thử nghiệm đầu tiên. Ứng dụng có:
-- Tạo kho dữ liệu cục bộ bằng mật khẩu chính.
-- Mã hóa dữ liệu trong IndexedDB bằng AES-GCM và khóa dẫn xuất PBKDF2.
-- Ghi nhận giao dịch thu/chi cơ bản.
-- Tạo tài khoản tiền mặt/ngân hàng/ví.
-- Sao lưu file `.pfbackup` đã mã hóa.
-- Khôi phục file sau khi kiểm tra giải mã và xác nhận thay thế.
-- Service Worker cache các tệp ứng dụng để chạy offline sau lần tải đầu.
+## Tính năng
+- PIN số mới từ 4 chữ số trở lên; nút hiện/ẩn và xóa nhanh.
+- Dữ liệu mã hóa AES-GCM, khóa dẫn xuất PBKDF2, lưu cục bộ IndexedDB.
+- Nhập số tiền có dấu phân cách hàng nghìn.
+- Thêm/sửa/xóa giao dịch.
+- Thêm/sửa/xóa tài khoản; tìm kiếm tài khoản.
+- Danh mục thu/chi mặc định; thêm và xóa danh mục.
+- Hạn mức theo tháng và danh mục, cảnh báo khi đạt 80% hoặc vượt 100%.
+- Sao lưu/khôi phục file .pfbackup đã mã hóa; service worker cache để chạy offline.
 
-## Cách chạy thử đơn giản
+## Cài thử
+Cần chạy trên HTTPS (GitHub Pages phù hợp) hoặc localhost. Không mở trực tiếp index.html bằng trình quản lý file.
+1. Tải toàn bộ nội dung thư mục này lên repository GitHub.
+2. Settings → Pages → Deploy from branch → main → /(root).
+3. Mở URL HTTPS bằng Chrome Android, chọn Install app / Add to Home screen.
+4. Mở app khi có mạng lần đầu; sau đó bật chế độ máy bay để thử.
 
-PWA và Service Worker cần HTTPS hoặc localhost. Không mở trực tiếp `index.html` bằng cách nhấp đúp nếu muốn kiểm tra chế độ offline.
-
-### Cách thử trên máy tính có Python
-1. Giải nén thư mục.
-2. Mở Terminal/Command Prompt tại thư mục đó.
-3. Chạy: `python -m http.server 8000`
-4. Mở `http://localhost:8000` bằng Chrome hoặc Edge.
-5. Tạo mật khẩu chính, thử thêm giao dịch, sau đó tải file backup.
-6. Tải lại trang để kiểm tra khóa/mở khóa.
-7. Khi trang đã tải đủ, ngắt Internet (nếu đang dùng localhost thì vẫn truy cập localhost được) và thử lại.
-
-### Cài PWA trên thiết bị
-Đưa các tệp lên một static host HTTPS (ví dụ GitHub Pages hoặc Cloudflare Pages) một lần, mở URL trên thiết bị và chọn cài/thêm vào màn hình chính. Sau khi Service Worker cache thành công, có thể mở ứng dụng offline. Lần cài đầu cần Internet.
-
-## Cảnh báo bản thử nghiệm
-- Đây là MVP kỹ thuật, chưa phải sản phẩm hoàn thiện để lưu toàn bộ tài sản thật.
-- Chưa có chuyển khoản, tài sản, khoản vay, đầu tư, báo cáo nâng cao, chỉnh sửa/xóa giao dịch, nhập Excel hay kiểm thử đa thiết bị.
-- Bản này chưa triển khai khóa bằng vân tay/Face ID. Trình duyệt không cung cấp một API sinh trắc học phổ quát; cần thiết kế riêng theo nền tảng hoặc dùng WebAuthn/passkey nếu phù hợp.
-- Không có chức năng đặt lại mật khẩu chính. Nếu quên mật khẩu, dữ liệu mã hóa không thể giải mã.
-- File backup có cùng mật khẩu chính hiện tại; giữ mật khẩu ở nơi an toàn.
-- Trình duyệt/OS có thể xóa dữ liệu cục bộ. Sao lưu định kỳ ra USB/ổ cứng.
-- Cần kiểm thử restore và tương thích trên Android, iOS, Windows, macOS trước khi dùng dữ liệu quan trọng.
-- Không đưa file backup lên dịch vụ công cộng hoặc gửi cho người khác.
-
-## Cấu trúc
-- `index.html`: giao diện
-- `styles.css`: giao diện responsive
-- `app.js`: IndexedDB, mã hóa, giao dịch, backup/restore
-- `sw.js`: cache offline
-- `manifest.webmanifest`: cấu hình PWA
+## Lưu ý rất quan trọng
+- Đây là bản MVP thử nghiệm, chưa được kiểm thử bảo mật độc lập hay trên mọi dòng OPPO/realme.
+- PIN 4 số là mức tối thiểu theo yêu cầu, nhưng nên dùng 6–8 số hoặc dài hơn.
+- Nếu đã có kho dữ liệu cũ, bản nâng cấp giữ nguyên cơ chế mở khóa cũ; PIN/mật khẩu cũ vẫn dùng để mở kho hiện tại. Quy định PIN số áp dụng khi tạo kho mới.
+- Xóa tài khoản đang có giao dịch hoặc danh mục đã được dùng trong giao dịch sẽ bị chặn để tránh mất liên kết dữ liệu.
+- Hạn mức hiện tính theo tháng dương lịch hiện tại.
+- Không nhập dữ liệu tài chính thật trước khi kiểm thử kỹ và tạo bản sao lưu.
+- Trước khi cập nhật mã nguồn, sao lưu file .pfbackup. Không xóa dữ liệu trang web/Chrome khi chưa có bản sao lưu.
+- Không có máy chủ, tài khoản trực tuyến hay đồng bộ đám mây.

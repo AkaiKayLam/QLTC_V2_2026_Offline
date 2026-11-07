@@ -1,18 +1,16 @@
 {
-  "name": "Tài chính cá nhân Offline",
+  "name": "Tài chính cá nhân offline",
   "short_name": "Tài chính",
-  "description": "Quản lý tài chính cá nhân lưu cục bộ",
   "start_url": "./",
-  "scope": "./",
   "display": "standalone",
-  "background_color": "#f4f7f7",
-  "theme_color": "#0f766e",
+  "background_color": "#f1f7f6",
+  "theme_color": "#087b72",
   "icons": [
     {
       "src": "./icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
     }
   ]
 }
