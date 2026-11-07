@@ -1,22 +1,27 @@
-# Tài chính cá nhân offline – phiên bản 4
+# Tài chính cá nhân offline – v4.6 (Android PWA)
 
-## Tính năng chính
-- **Phân loại giao dịch theo ngày**: mỗi ngày có dòng ngăn cách riêng.
-- **Tìm kiếm lịch sử**: từ khóa + khoảng ngày trên tab Giao dịch.
-- **Chặn ngày tương lai**: cảnh báo “Nhập lại ngày tháng”, không cho lưu.
-- **Cảnh báo số dư âm**: hiển thị “SOS” khi tài khoản âm.
-- **Chuyển khoản** giữa các ví.
-- **Vay nợ / cho vay** với tài khoản đặc biệt “Vay nợ”:
-  - Khi vay: chuyển từ tài khoản Vay nợ → ví.
-  - Khi trả nợ: chuyển từ ví → tài khoản Vay nợ + ghi nhận Trả nợ.
-- **Tổng thu / Tổng chi / Số dư ròng** xếp dọc.
-- **Font nhỏ hơn** để xem nhiều nội dung hơn.
-- **Loại tài khoản mặc định**: Tiền mặt, VCB, TCB, MBB, Ví khác, Vay nợ.
-- **Danh mục thu/chi** theo nhóm bạn yêu cầu (có thể thêm/xóa).
-- **Tab Thống kê**: biểu đồ thu/chi theo danh mục, chọn khoảng ngày hoặc theo năm (mặc định tháng hiện tại).
-- **Thứ tự tab**: Tài khoản → Giao dịch → Vay nợ → Thống kê → Hạn mức → Danh mục → Sao lưu → Cài đặt.
-- Sao lưu mã hóa .pfbackup + xuất CSV / copy bảng (không mã hóa).
-- Tab Cài đặt: hướng dẫn; tích hợp Google Drive đầy đủ cần cấu hình Google Cloud (chưa có sẵn trong bản offline thuần).
+## Cài trên Android (mượt, như app)
+1. Đưa code lên GitHub Pages (HTTPS bắt buộc).
+2. Mở bằng **Chrome** trên điện thoại.
+3. Menu (⋮) → **Cài đặt ứng dụng** / **Add to Home screen**.
+4. Mở icon trên màn hình chính (chạy standalone, không thanh địa chỉ).
 
-## Cài đặt
-Chạy trên HTTPS (GitHub Pages) hoặc localhost. Không mở file trực tiếp bằng trình quản lý file.
+## Vân tay / Face ID trên Android
+1. App **phải** chạy bằng HTTPS (GitHub Pages) hoặc localhost — không dùng file://.
+2. Mở khóa bằng PIN lần đầu.
+3. Vào **Sao lưu - Cài đặt** → **Đăng ký vân tay / Face ID** → xác nhận vân tay khi hệ thống hỏi.
+4. Khóa app → lần sau bấm **Mở bằng vân tay / Face ID**.
+
+Nếu đăng ký thất bại:
+- Kiểm tra Chrome đã cập nhật.
+- Đảm bảo máy có vân tay và đã thêm vân tay trong Cài đặt hệ thống.
+- Origin (địa chỉ web) không đổi giữa lúc đăng ký và lúc mở.
+
+## Tối ưu mượt
+- Render danh sách gộp theo frame (requestAnimationFrame)
+- Phân trang 50 giao dịch, debounce tìm kiếm
+- CSS contain + content-visibility cho list dài
+- Touch manipulation, không delay click
+
+## Google Drive
+Sao lưu thủ công, ghi đè `TaiChinhCaNhan_latest.pfbackup`. Cần OAuth Client ID + bật Drive API.

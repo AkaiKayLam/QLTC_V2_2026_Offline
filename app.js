@@ -102,6 +102,7 @@ function lock(){
   $("lockBtn").classList.add("hidden");
   $("unlockPassword").value="";
   showOnly("unlockPanel");
+  updateBioUI();
 }
 function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 
@@ -129,6 +130,12 @@ function getDebtAccount(){
 }
 
 function render(){
+  // coalesce multiple render calls into one frame (mượt hơn trên Android)
+  if(window.__renderScheduled) return;
+  window.__renderScheduled = true;
+  requestAnimationFrame(()=>{ window.__renderScheduled=false; renderNow(); });
+}
+function renderNow(){
   let inc=txTotal("INCOME"), out=txTotal("EXPENSE");
   let opening=appData.accounts.reduce((s,a)=>s+(a.openingBalance||0),0);
   $("incomeTotal").textContent=money(inc);
@@ -169,49 +176,47 @@ function filteredTransactions(){
 }
 
 function renderTransactions(){
-  let rows=filteredTransactions();
-  let show=rows.slice(0,txDisplayLimit);
-  let html="";
+  const list = $("transactionList");
+  if(!list) return;
+  const rows = filteredTransactions();
+  const show = rows.slice(0, txDisplayLimit);
   if(!show.length){
-    html='<div class="empty">Chưa có giao dịch'+(txFilter.kw||txFilter.from||txFilter.to?' khớp tìm kiếm':'')+'.</div>';
+    list.innerHTML = '<div class="empty">Chưa có giao dịch'+(txFilter.kw||txFilter.from||txFilter.to?' khớp tìm kiếm':'')+'.</div>';
   }else{
-    let lastDay="";
-    html=show.map(t=>{
-      let dayBlock="";
-      if(t.date!==lastDay){
-        lastDay=t.date;
-        dayBlock=`<div class="day-sep">${esc(t.date)}</div>`;
+    const accMap = {};
+    for(const a of appData.accounts) accMap[a.id] = a.name;
+    let lastDay = "";
+    let html = "";
+    for(let i=0;i<show.length;i++){
+      const t = show[i];
+      if(t.date !== lastDay){
+        lastDay = t.date;
+        html += '<div class="day-sep">'+esc(t.date)+'</div>';
       }
-      let a=appData.accounts.find(x=>x.id===t.accountId);
-      if(t.type==="TRANSFER"){
-        let toA=appData.accounts.find(x=>x.id===t.toAccountId);
-        return dayBlock+`<div class="list-row">
-          <div class="grow"><b>Chuyển khoản <span class="transfer-tag">Chuyển</span></b>
-          <small>${esc(a?.name||"?")} → ${esc(toA?.name||"?")}${t.note?" · "+esc(t.note):""}</small></div>
-          <strong class="amount">${money(t.amount)}</strong>
-          <div class="actions"><button data-del-tx="${t.id}" class="tiny danger">Xóa</button></div>
-        </div>`;
+      if(t.type === "TRANSFER"){
+        html += '<div class="list-row"><div class="grow"><b>Chuyển khoản <span class="transfer-tag">Chuyển</span></b><small>'
+          +esc(accMap[t.accountId]||"?")+' → '+esc(accMap[t.toAccountId]||"?")
+          +(t.note?(' · '+esc(t.note)):'')+'</small></div><strong class="amount">'+money(t.amount)
+          +'</strong><div class="actions"><button data-del-tx="'+t.id+'" class="tiny danger">Xóa</button></div></div>';
+      }else{
+        const tag = t.debtId ? (' <span class="debt-tag '+(t.type==="INCOME"?"lend":"borrow")+'">Vay nợ</span>') : "";
+        html += '<div class="list-row"><div class="grow"><b>'+esc(t.category)+tag+'</b><small>'
+          +esc(accMap[t.accountId]||"Tài khoản đã xóa")+(t.note?(' · '+esc(t.note)):'')
+          +'</small></div><strong class="amount '+(t.type==="INCOME"?"income":"expense")+'">'
+          +(t.type==="INCOME"?"+":"−")+money(t.amount)
+          +'</strong><div class="actions"><button data-edit-tx="'+t.id+'" class="tiny">Sửa</button>'
+          +'<button data-del-tx="'+t.id+'" class="tiny danger">Xóa</button></div></div>';
       }
-      let tag="";
-      if(t.debtId) tag=` <span class="debt-tag ${t.type==="INCOME"?"lend":"borrow"}">Vay nợ</span>`;
-      return dayBlock+`<div class="list-row">
-        <div class="grow"><b>${esc(t.category)}${tag}</b>
-        <small>${esc(a?.name||"Tài khoản đã xóa")}${t.note?" · "+esc(t.note):""}</small></div>
-        <strong class="amount ${t.type==="INCOME"?"income":"expense"}">${t.type==="INCOME"?"+":"−"}${money(t.amount)}</strong>
-        <div class="actions">
-          <button data-edit-tx="${t.id}" class="tiny">Sửa</button>
-          <button data-del-tx="${t.id}" class="tiny danger">Xóa</button>
-        </div>
-      </div>`;
-    }).join("");
+    }
+    list.innerHTML = html;
   }
-  $("transactionList").innerHTML=html;
-  let remain=rows.length - show.length;
-  if(remain>0){
-    $("loadMoreWrap").classList.remove("hidden");
-    $("loadMoreBtn").textContent=`Hiển thị thêm (còn ${remain})`;
-  }else{
-    $("loadMoreWrap").classList.add("hidden");
+  const remain = rows.length - show.length;
+  const wrap = $("loadMoreWrap");
+  if(wrap){
+    if(remain > 0){
+      wrap.classList.remove("hidden");
+      $("loadMoreBtn").textContent = "Hiển thị thêm (còn "+remain+")";
+    }else wrap.classList.add("hidden");
   }
 }
 
@@ -243,13 +248,11 @@ function renderCategories(){
     "Chi khác":["Sự kiện","Biếu tặng","Dịch vụ công","Chi khác","Cho vay","Trả nợ"]
   };
   let out=[];
-  // income first
   out.push(`<div class="cat-group">Thu nhập</div>`);
   for(let name of appData.categories.INCOME){
-    out.push(`<div class="list-row"><div class="grow"><b>${esc(name)}</b><small>Thu nhập</small></div>
+    out.push(`<div class="list-row cat-child"><div class="grow"><b>${esc(name)}</b></div>
       <button class="tiny danger" data-del-category="INCOME|${encodeURIComponent(name)}">Xóa</button></div>`);
   }
-  // expense groups
   let used=new Set();
   for(let [gname,list] of Object.entries(groups)){
     if(gname==="Thu nhập") continue;
@@ -258,16 +261,15 @@ function renderCategories(){
     out.push(`<div class="cat-group">${esc(gname)}</div>`);
     for(let name of items){
       used.add(name);
-      out.push(`<div class="list-row"><div class="grow"><b>${esc(name)}</b><small>Chi tiêu</small></div>
+      out.push(`<div class="list-row cat-child"><div class="grow"><b>${esc(name)}</b></div>
         <button class="tiny danger" data-del-category="EXPENSE|${encodeURIComponent(name)}">Xóa</button></div>`);
     }
   }
-  // remaining expense
   let rest=appData.categories.EXPENSE.filter(n=>!used.has(n));
   if(rest.length){
     out.push(`<div class="cat-group">Khác</div>`);
     for(let name of rest){
-      out.push(`<div class="list-row"><div class="grow"><b>${esc(name)}</b><small>Chi tiêu</small></div>
+      out.push(`<div class="list-row cat-child"><div class="grow"><b>${esc(name)}</b></div>
         <button class="tiny danger" data-del-category="EXPENSE|${encodeURIComponent(name)}">Xóa</button></div>`);
     }
   }
@@ -367,7 +369,7 @@ function renderDebts(){
 
 function switchTab(t){
   document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===t));
-  ["accounts","transactions","debts","stats","budgets","categories","backup","settings"].forEach(v=>{
+  ["accounts","transactions","debts","stats","budgets","categories","backup"].forEach(v=>{
     let el=$(`${v}View`);
     if(el) el.classList.toggle("hidden",v!==t);
   });
@@ -625,7 +627,7 @@ $("addAccountBtn").onclick=()=>{
   $("accountForm").classList.remove("hidden");
 };
 $("cancelAccountBtn").onclick=()=>$("accountForm").classList.add("hidden");
-$("accountSearch").oninput=renderAccounts;
+let _accSearchTimer; $("accountSearch").oninput=()=>{clearTimeout(_accSearchTimer);_accSearchTimer=setTimeout(renderAccounts,120)};
 $("accountForm").onsubmit=async e=>{
   e.preventDefault();
   let id=$("accountId").value, name=$("accountName").value.trim();
@@ -894,10 +896,465 @@ $("statsRunBtn").onclick=runStats;
 
 /* Backup */
 $("exportBackupBtn").onclick=()=>exportBackup().catch(e=>msg(e.message));
-$("exportBackupBtn2").onclick=()=>exportBackup().catch(e=>msg(e.message));
+
 $("importBackupBtn").onclick=()=>importBackup($("backupFile").files[0]).catch(e=>msg("Khôi phục thất bại: "+e.message));
 $("exportCsvBtn").onclick=()=>exportCsv();
 $("copyTxBtn").onclick=()=>copyTransactionsTable();
+
+
+
+
+/* ========== GOOGLE DRIVE BACKUP ========== */
+const GOOGLE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+let googleTokenClient = null;
+let googleAccessToken = null;
+
+function getSavedClientId(){
+  return localStorage.getItem("pf_google_client_id") || "";
+}
+function setGoogleStatus(text, ok){
+  let el = $("googleStatus");
+  if(!el) return;
+  el.textContent = text;
+  el.style.color = ok ? "#075e58" : "#b45309";
+}
+function updateGoogleUI(){
+  const logged = !!googleAccessToken;
+  if($("googleLoginBtn")) $("googleLoginBtn").classList.toggle("hidden", logged);
+  if($("googleLogoutBtn")) $("googleLogoutBtn").classList.toggle("hidden", !logged);
+  if($("driveBackupBtn")) $("driveBackupBtn").disabled = !logged;
+  if($("driveRestoreBtn")) $("driveRestoreBtn").disabled = !logged;
+  if(logged) setGoogleStatus("Đã đăng nhập Google — có thể sao lưu", true);
+  else setGoogleStatus(getSavedClientId() ? "Đã có Client ID — hãy Đăng nhập Google" : "Chưa cấu hình Client ID", false);
+}
+
+function initGoogleApis(){
+  const clientId = getSavedClientId();
+  if($("googleClientId")) $("googleClientId").value = clientId;
+  if(!clientId){
+    setGoogleStatus("Chưa cấu hình Client ID", false);
+    updateGoogleUI();
+    return;
+  }
+  const tryInit = ()=>{
+    if(typeof google === "undefined" || !google.accounts || !google.accounts.oauth2){
+      setTimeout(tryInit, 400);
+      return;
+    }
+    try{
+      googleTokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: GOOGLE_SCOPE,
+        callback: (resp)=>{
+          if(resp.error){
+            console.error(resp);
+            setGoogleStatus("Đăng nhập thất bại: " + (resp.error_description || resp.error), false);
+            googleAccessToken = null;
+            updateGoogleUI();
+            msg("Google lỗi: " + (resp.error_description || resp.error) + ". Kiểm tra Client ID và Authorized JavaScript origins.");
+            return;
+          }
+          googleAccessToken = resp.access_token;
+          updateGoogleUI();
+          msg("Đã đăng nhập Google thành công.");
+        },
+        error_callback: (err)=>{
+          console.error(err);
+          msg("Không mở được cửa sổ đăng nhập Google. Kiểm tra origin (HTTPS/localhost) và Client ID.");
+        }
+      });
+      updateGoogleUI();
+    }catch(e){
+      console.error(e);
+      setGoogleStatus("Lỗi khởi tạo Google: " + e.message, false);
+    }
+  };
+  tryInit();
+}
+
+function googleLogin(){
+  const clientId = ($("googleClientId") && $("googleClientId").value.trim()) || getSavedClientId();
+  if(!clientId || !clientId.includes("apps.googleusercontent.com")){
+    msg("Hãy nhập đúng Google Client ID rồi bấm Lưu Client ID.");
+    return;
+  }
+  localStorage.setItem("pf_google_client_id", clientId);
+  if(!googleTokenClient){
+    initGoogleApis();
+    setTimeout(()=>{
+      if(googleTokenClient) googleTokenClient.requestAccessToken({prompt: "consent"});
+      else msg("Google script chưa sẵn sàng. Đợi 2 giây rồi thử lại.");
+    }, 600);
+    return;
+  }
+  // Re-create client if clientId changed
+  googleTokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: clientId,
+    scope: GOOGLE_SCOPE,
+    callback: (resp)=>{
+      if(resp.error){
+        setGoogleStatus("Đăng nhập thất bại: " + (resp.error_description || resp.error), false);
+        googleAccessToken = null;
+        updateGoogleUI();
+        msg("Google lỗi: " + (resp.error_description || resp.error));
+        return;
+      }
+      googleAccessToken = resp.access_token;
+      updateGoogleUI();
+      msg("Đã đăng nhập Google thành công.");
+    }
+  });
+  googleTokenClient.requestAccessToken({prompt: googleAccessToken ? "" : "consent"});
+}
+
+function googleLogout(){
+  if(googleAccessToken && typeof google !== "undefined" && google.accounts){
+    try{ google.accounts.oauth2.revoke(googleAccessToken, ()=>{}); }catch(e){}
+  }
+  googleAccessToken = null;
+  updateGoogleUI();
+  msg("Đã đăng xuất Google.");
+}
+
+async function driveFindLatestBackupId(){
+  const fixedName = "TaiChinhCaNhan_latest.pfbackup";
+  let q = "name = '" + fixedName + "' and trashed=false";
+  let res = await fetch("https://www.googleapis.com/drive/v3/files?pageSize=5&fields=files(id,name)&q=" + encodeURIComponent(q), {
+    headers: { "Authorization": "Bearer " + googleAccessToken }
+  });
+  if(res.ok){
+    const data = await res.json();
+    if(data.files && data.files.length) return data.files[0].id;
+  }
+  return null;
+}
+
+async function driveUploadBackup(){
+  if(!googleAccessToken){ msg("Hãy đăng nhập Google trước."); return; }
+  try{
+    msg("Đang sao lưu lên Drive (ghi đè)...");
+    const v = await readVault();
+    if(!v) throw new Error("Không có dữ liệu để sao lưu");
+    const payload = {
+      format: BACKUP_FORMAT,
+      formatVersion: 1,
+      createdAt: new Date().toISOString(),
+      vault: v
+    };
+    const content = JSON.stringify(payload);
+    const fixedName = "TaiChinhCaNhan_latest.pfbackup";
+    const existingId = await driveFindLatestBackupId();
+
+    if(existingId){
+      const res = await fetch("https://www.googleapis.com/upload/drive/v3/files/" + existingId + "?uploadType=media", {
+        method: "PATCH",
+        headers: {
+          "Authorization": "Bearer " + googleAccessToken,
+          "Content-Type": "application/json"
+        },
+        body: content
+      });
+      if(!res.ok){
+        const t = await res.text();
+        throw new Error(t || ("HTTP " + res.status));
+      }
+      msg("Đã ghi đè bản sao lưu trên Google Drive.");
+    }else{
+      // multipart create
+      const metadata = { name: fixedName, mimeType: "application/json" };
+      const boundary = "pfboundary" + Date.now();
+      const body = "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" +
+        JSON.stringify(metadata) + "\r\n--" + boundary + "\r\nContent-Type: application/json\r\n\r\n" +
+        content + "\r\n--" + boundary + "--";
+      const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + googleAccessToken,
+          "Content-Type": "multipart/related; boundary=" + boundary
+        },
+        body: body
+      });
+      if(!res.ok){
+        const t = await res.text();
+        throw new Error(t || ("HTTP " + res.status));
+      }
+      msg("Đã tạo bản sao lưu trên Google Drive.");
+    }
+  }catch(e){
+    console.error(e);
+    let m = e.message || String(e);
+    if(m.includes("401") || m.includes("Invalid Credentials")) m = "Token hết hạn. Hãy Đăng xuất rồi Đăng nhập Google lại.";
+    if(m.includes("403")) m = "Không có quyền Drive. Kiểm tra scope và đã bật Google Drive API.";
+    msg("Sao lưu Drive thất bại: " + m);
+  }
+}
+
+async function driveListBackups(){
+  let files = [];
+  let q = "name = 'TaiChinhCaNhan_latest.pfbackup' and trashed=false";
+  let res = await fetch("https://www.googleapis.com/drive/v3/files?pageSize=5&fields=files(id,name,createdTime)&q=" + encodeURIComponent(q), {
+    headers: { "Authorization": "Bearer " + googleAccessToken }
+  });
+  if(res.ok){
+    const data = await res.json();
+    if(data.files) files = files.concat(data.files);
+  }
+  q = "name contains 'TaiChinhCaNhan_' and name contains '.pfbackup' and trashed=false";
+  res = await fetch("https://www.googleapis.com/drive/v3/files?pageSize=10&fields=files(id,name,createdTime)&q=" + encodeURIComponent(q) + "&orderBy=createdTime desc", {
+    headers: { "Authorization": "Bearer " + googleAccessToken }
+  });
+  if(res.ok){
+    const data = await res.json();
+    const ids = new Set(files.map(f=>f.id));
+    for(const f of (data.files||[])) if(!ids.has(f.id)) files.push(f);
+  }
+  return files;
+}
+
+async function driveRestoreBackup(){
+  if(!googleAccessToken){ msg("Hãy đăng nhập Google trước."); return; }
+  try{
+    msg("Đang tìm file sao lưu trên Drive...");
+    const files = await driveListBackups();
+    if(!files.length){
+      msg("Không tìm thấy file .pfbackup trên Drive. Hãy sao lưu trước.");
+      return;
+    }
+    let listText = files.map((f,i)=> (i+1) + ". " + f.name + " (" + ((f.createdTime||"").slice(0,10)) + ")").join("\n");
+    let choice = prompt("Chọn số thứ tự file muốn khôi phục:\n\n" + listText, "1");
+    if(!choice) return;
+    let idx = parseInt(choice,10) - 1;
+    if(isNaN(idx) || idx<0 || idx>=files.length){ msg("Lựa chọn không hợp lệ."); return; }
+    if(!confirm("Khôi phục sẽ thay thế dữ liệu hiện tại bằng:\n" + files[idx].name + "\nTiếp tục?")) return;
+
+    const res = await fetch("https://www.googleapis.com/drive/v3/files/" + files[idx].id + "?alt=media", {
+      headers: { "Authorization": "Bearer " + googleAccessToken }
+    });
+    if(!res.ok) throw new Error(await res.text());
+    const text = await res.text();
+    const p = JSON.parse(text);
+    if(p.format !== BACKUP_FORMAT || !p.vault || !p.vault.ciphertext) throw new Error("File không hợp lệ.");
+    let pin = prompt("Nhập PIN của file sao lưu:");
+    if(!pin) return;
+    let k = await derive(pin, un64(p.vault.salt));
+    let d = normalize(await dec(p.vault, k));
+    await writeVault(p.vault);
+    cryptoKey = k;
+    window.localSalt = p.vault.salt;
+    appData = d;
+    txDisplayLimit = 50;
+    render();
+    msg("Đã khôi phục từ Google Drive thành công.");
+  }catch(e){
+    console.error(e);
+    msg("Khôi phục Drive thất bại: " + (e.message || e));
+  }
+}
+
+
+/* ========== BIOMETRIC (WebAuthn) – tối ưu Android ========== */
+const BIO_CRED_KEY = "pf_webauthn_cred";
+const BIO_PIN_KEY = "pf_bio_pin";
+
+function bioSupported(){
+  try{
+    return !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+  }catch(e){ return false; }
+}
+
+async function bioPlatformAvailable(){
+  if(!bioSupported()) return false;
+  try{
+    if(typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === "function"){
+      return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+    }
+  }catch(e){}
+  return true; // assume possible
+}
+
+function getRpId(){
+  // Android Chrome requires exact host; never use empty
+  const h = location.hostname;
+  if(!h || h === "localhost" || h === "127.0.0.1") return "localhost";
+  return h;
+}
+
+function updateBioUI(){
+  const has = !!localStorage.getItem(BIO_CRED_KEY) && !!localStorage.getItem(BIO_PIN_KEY);
+  const secure = !!window.isSecureContext;
+  if($("bioStatus")){
+    if(!secure){
+      $("bioStatus").textContent = "Cần HTTPS hoặc localhost mới dùng vân tay được.";
+    }else if(!bioSupported()){
+      $("bioStatus").textContent = "Trình duyệt không hỗ trợ WebAuthn.";
+    }else if(has){
+      $("bioStatus").textContent = "Đã đăng ký vân tay / Face ID — mở khóa không cần gõ PIN.";
+    }else{
+      $("bioStatus").textContent = "Chưa đăng ký. Mở khóa bằng PIN trước, rồi bấm Đăng ký.";
+    }
+  }
+  if($("bioUnlockBtn")) $("bioUnlockBtn").classList.toggle("hidden", !has || !secure);
+  if($("bioRegisterBtn")) $("bioRegisterBtn").disabled = !secure || !bioSupported() || !cryptoKey;
+  if($("bioRemoveBtn")) $("bioRemoveBtn").disabled = !has;
+}
+
+async function bioRegister(){
+  if(!window.isSecureContext){
+    msg("Vân tay chỉ hoạt động trên HTTPS hoặc localhost. Hãy cài app từ GitHub Pages / Add to Home screen.");
+    return;
+  }
+  if(!bioSupported()){ msg("Trình duyệt không hỗ trợ vân tay / Face ID."); return; }
+  if(!cryptoKey){ msg("Hãy mở khóa bằng PIN trước khi đăng ký vân tay."); return; }
+
+  const available = await bioPlatformAvailable();
+  if(!available){
+    msg("Thiết bị không có vân tay/Face ID dùng được với trình duyệt này.");
+    return;
+  }
+
+  let pin = prompt("Nhập lại PIN hiện tại để liên kết vân tay / Face ID:");
+  if(!pin) return;
+  try{
+    let v = await readVault();
+    if(!v) throw new Error("no vault");
+    let k = await derive(pin, un64(v.salt));
+    await dec(v, k);
+  }catch(e){
+    msg("PIN không đúng.");
+    return;
+  }
+
+  try{
+    // Remove old credential first
+    localStorage.removeItem(BIO_CRED_KEY);
+    localStorage.removeItem(BIO_PIN_KEY);
+
+    const userId = crypto.getRandomValues(new Uint8Array(16));
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const rpId = getRpId();
+
+    const publicKey = {
+      challenge,
+      rp: { name: "Tai chinh ca nhan", id: rpId },
+      user: {
+        id: userId,
+        name: "user@" + rpId,
+        displayName: "Tai chinh"
+      },
+      pubKeyCredParams: [
+        { type: "public-key", alg: -7 },   // ES256
+        { type: "public-key", alg: -257 }  // RS256
+      ],
+      authenticatorSelection: {
+        authenticatorAttachment: "platform",
+        userVerification: "required",
+        residentKey: "preferred",
+        requireResidentKey: false
+      },
+      timeout: 90000,
+      attestation: "none"
+    };
+
+    const cred = await navigator.credentials.create({ publicKey });
+    if(!cred || !cred.rawId) throw new Error("Không nhận được credential từ thiết bị");
+
+    const rawId = btoa(String.fromCharCode.apply(null, Array.from(new Uint8Array(cred.rawId))));
+    localStorage.setItem(BIO_CRED_KEY, rawId);
+    localStorage.setItem(BIO_PIN_KEY, btoa(unescape(encodeURIComponent(pin))));
+    // Also remember rpId used
+    localStorage.setItem("pf_bio_rpid", rpId);
+
+    updateBioUI();
+    msg("Đăng ký vân tay / Face ID thành công. Lần sau chỉ cần chạm vân tay.");
+  }catch(e){
+    console.error("bioRegister", e);
+    let m = e.message || e.name || String(e);
+    if(e.name === "NotAllowedError") m = "Bạn đã hủy hoặc thiết bị từ chối. Thử lại và xác nhận vân tay khi hệ thống hỏi.";
+    if(e.name === "InvalidStateError") m = "Vân tay đã đăng ký trước đó. Bấm Hủy đăng ký rồi đăng ký lại.";
+    if(e.name === "SecurityError") m = "Lỗi bảo mật (rpId/origin). App phải chạy đúng domain HTTPS đã cài.";
+    msg("Đăng ký thất bại: " + m);
+  }
+}
+
+async function bioUnlock(){
+  if(!window.isSecureContext){
+    $("unlockError").textContent = "Cần HTTPS hoặc localhost.";
+    return;
+  }
+  const stored = localStorage.getItem(BIO_CRED_KEY);
+  const encPin = localStorage.getItem(BIO_PIN_KEY);
+  if(!stored || !encPin){
+    $("unlockError").textContent = "Chưa đăng ký vân tay trên thiết bị này.";
+    return;
+  }
+  try{
+    $("unlockError").textContent = "Đang chờ vân tay / Face ID...";
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const rawId = Uint8Array.from(atob(stored), c => c.charCodeAt(0));
+    const rpId = localStorage.getItem("pf_bio_rpid") || getRpId();
+
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge,
+        rpId,
+        allowCredentials: [{
+          type: "public-key",
+          id: rawId,
+          transports: ["internal"]
+        }],
+        userVerification: "required",
+        timeout: 90000
+      }
+    });
+    if(!assertion) throw new Error("Xác thực thất bại");
+
+    const pin = decodeURIComponent(escape(atob(encPin)));
+    $("unlockError").textContent = "";
+    await unlock(pin);
+    msg("Đã mở khóa bằng vân tay / Face ID.");
+  }catch(e){
+    console.error("bioUnlock", e);
+    if(e.name === "NotAllowedError"){
+      $("unlockError").textContent = "Đã hủy hoặc vân tay không khớp. Thử lại.";
+    }else if(e.name === "SecurityError"){
+      $("unlockError").textContent = "Lỗi domain/HTTPS. Mở đúng địa chỉ đã đăng ký.";
+    }else{
+      $("unlockError").textContent = "Không mở được: " + (e.message || e.name);
+    }
+  }
+}
+
+function bioRemove(){
+  localStorage.removeItem(BIO_CRED_KEY);
+  localStorage.removeItem(BIO_PIN_KEY);
+  localStorage.removeItem("pf_bio_rpid");
+  updateBioUI();
+  msg("Đã hủy đăng ký vân tay / Face ID.");
+}
+
+function wireGoogleButtons(){
+  if($("saveClientIdBtn")){
+    $("saveClientIdBtn").onclick = ()=>{
+      const id = ($("googleClientId").value || "").trim();
+      if(!id || !id.includes(".apps.googleusercontent.com")){
+        msg("Client ID không hợp lệ. Phải dạng xxxxx.apps.googleusercontent.com");
+        return;
+      }
+      localStorage.setItem("pf_google_client_id", id);
+      msg("Đã lưu Client ID.");
+      initGoogleApis();
+    };
+  }
+  if($("googleLoginBtn")) $("googleLoginBtn").onclick = googleLogin;
+  if($("googleLogoutBtn")) $("googleLogoutBtn").onclick = googleLogout;
+  if($("driveBackupBtn")) $("driveBackupBtn").onclick = ()=>driveUploadBackup();
+  if($("driveRestoreBtn")) $("driveRestoreBtn").onclick = ()=>driveRestoreBackup();
+  if($("bioRegisterBtn")) $("bioRegisterBtn").onclick = bioRegister;
+  if($("bioRemoveBtn")) $("bioRemoveBtn").onclick = bioRemove;
+  if($("bioUnlockBtn")) $("bioUnlockBtn").onclick = bioUnlock;
+  updateBioUI();
+  updateGoogleUI();
+}
 
 async function init(){
   if(!crypto?.subtle||!indexedDB){
@@ -905,8 +1362,16 @@ async function init(){
     return;
   }
   db=await openDb();
-  showOnly(await readVault()?"unlockPanel":"setupPanel");
+  const hasVault = !!(await readVault());
+  showOnly(hasVault?"unlockPanel":"setupPanel");
+  updateBioUI();
+  // Android: nếu đã đăng ký vân tay thì tự gợi ý sau 400ms
+  if(hasVault && localStorage.getItem("pf_webauthn_cred") && window.isSecureContext){
+    setTimeout(()=>{ if($("bioUnlockBtn") && !$("bioUnlockBtn").classList.contains("hidden")) { /* chỉ hiện nút, không auto-trigger (tránh bị chặn) */ } }, 300);
+  }
   if("serviceWorker" in navigator && (location.protocol==="https:"||location.hostname==="localhost"))
     navigator.serviceWorker.register("./sw.js").catch(()=>{});
+  wireGoogleButtons();
+  initGoogleApis();
 }
 init().catch(e=>msg("Không thể khởi tạo: "+e.message));

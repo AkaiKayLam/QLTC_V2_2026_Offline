@@ -1,9 +1,19 @@
 <!doctype html>
 <html lang="vi">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#0f766e"><meta name="description" content="Quản lý tài chính cá nhân offline">
-<link rel="manifest" href="./manifest.webmanifest"><link rel="icon" href="./icon-192.png"><link rel="stylesheet" href="./styles.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#087b72">
+<meta name="description" content="Quản lý tài chính cá nhân offline">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tài chính">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon-192.png">
+<link rel="apple-touch-icon" href="./icon-180.png">
+<link rel="stylesheet" href="./styles.css">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <title>Tài chính cá nhân</title>
 </head><body>
 <header class="topbar"><div><small>LOCAL-FIRST · OFFLINE</small><h1>Tài chính cá nhân</h1></div><button id="lockBtn" class="secondary hidden">Khóa</button></header>
@@ -11,7 +21,9 @@
 <section id="setupPanel" class="panel narrow hidden"><h2>Tạo kho dữ liệu</h2><p>Đặt PIN số từ 4 chữ số trở lên. PIN dùng để mã hóa dữ liệu trên thiết bị. Nếu quên PIN, không thể giải mã dữ liệu nếu không có bản sao lưu và PIN đúng.</p>
 <form id="setupForm"><label>PIN chính<div class="input-wrap"><input id="setupPassword" type="password" inputmode="numeric" pattern="[0-9]{4,}" minlength="4" autocomplete="new-password" required placeholder="Ít nhất 4 chữ số"><button type="button" class="peek" data-target="setupPassword">Hiện</button><button type="button" class="clear" data-target="setupPassword">×</button></div></label>
 <label>Nhập lại PIN<div class="input-wrap"><input id="setupPassword2" type="password" inputmode="numeric" pattern="[0-9]{4,}" minlength="4" required><button type="button" class="peek" data-target="setupPassword2">Hiện</button><button type="button" class="clear" data-target="setupPassword2">×</button></div></label><button class="primary">Tạo kho dữ liệu</button></form></section>
-<section id="unlockPanel" class="panel narrow hidden"><h2>Mở khóa</h2><form id="unlockForm"><label>PIN<div class="input-wrap"><input id="unlockPassword" type="password" inputmode="numeric" autocomplete="current-password" required><button type="button" class="peek" data-target="unlockPassword">Hiện</button><button type="button" class="clear" data-target="unlockPassword">×</button></div></label><button class="primary">Mở khóa</button></form><p id="unlockError" class="error"></p></section>
+<section id="unlockPanel" class="panel narrow hidden"><h2>Mở khóa</h2><form id="unlockForm"><label>PIN<div class="input-wrap"><input id="unlockPassword" type="password" inputmode="numeric" autocomplete="current-password" required><button type="button" class="peek" data-target="unlockPassword">Hiện</button><button type="button" class="clear" data-target="unlockPassword">×</button></div></label><button class="primary">Mở khóa</button></form>
+<button type="button" id="bioUnlockBtn" class="primary hidden" style="width:100%;margin-top:10px">🔐 Mở bằng vân tay / Face ID</button>
+<p id="unlockError" class="error"></p></section>
 <section id="appPanel" class="hidden">
 <div class="summary-grid">
   <article><span>Tổng thu</span><strong id="incomeTotal">0 ₫</strong></article>
@@ -25,8 +37,7 @@
   <button class="tab" data-tab="stats">Thống kê</button>
   <button class="tab" data-tab="budgets">Hạn mức</button>
   <button class="tab" data-tab="categories">Danh mục</button>
-  <button class="tab" data-tab="backup">Sao lưu</button>
-  <button class="tab" data-tab="settings">Cài đặt</button>
+  <button class="tab" data-tab="backup">Sao lưu - Cài đặt</button>
 </nav>
 
 <!-- TÀI KHOẢN -->
@@ -150,36 +161,65 @@
 <!-- SAO LƯU -->
 <section id="backupView" class="view hidden">
   <div class="panel backup-panel">
-    <h2>Sao lưu & khôi phục</h2>
-    <p>File sao lưu chứa dữ liệu đã mã hóa. Hãy giữ PIN và file ở nơi an toàn.</p>
+    <h2>Sao lưu &amp; Cài đặt</h2>
+
+    <h3>Sao lưu cục bộ (thủ công)</h3>
+    <p style="font-size:12px;color:#5b6967">Bấm nút khi bạn muốn sao lưu. File tải về máy.</p>
     <button id="exportBackupBtn" class="primary">Tải file sao lưu (.pfbackup)</button>
-    <hr>
-    <h3>Xuất dữ liệu thường (không mã hóa)</h3>
-    <p>Xuất bảng giao dịch ra CSV để mở bằng Excel hoặc Google Sheets.</p>
-    <div class="btn-group" style="margin-bottom:10px">
-      <button id="exportCsvBtn" class="primary">Xuất CSV (Excel)</button>
+    <div class="btn-group" style="margin:10px 0">
+      <button id="exportCsvBtn" class="secondary">Xuất CSV (Excel)</button>
       <button id="copyTxBtn" class="secondary">Sao chép bảng giao dịch</button>
     </div>
     <hr>
-    <label>Chọn file .pfbackup<input id="backupFile" type="file" accept=".pfbackup,.json"></label>
+    <label>Chọn file .pfbackup để khôi phục<input id="backupFile" type="file" accept=".pfbackup,.json"></label>
     <button id="importBackupBtn" class="secondary">Kiểm tra và khôi phục</button>
+
+    <hr>
+    <h3>Đăng nhập Google &amp; sao lưu Drive (ghi đè)</h3>
+    <p style="font-size:12px;color:#5b6967;margin:0 0 10px">
+      Sao lưu thủ công: mỗi lần bấm sẽ <b>ghi đè</b> file cũ trên Drive (không tạo nhiều bản, tiết kiệm dung lượng).
+      Cần tạo OAuth Client ID trên Google Cloud Console.
+    </p>
+    <label>Google OAuth Client ID
+      <input id="googleClientId" placeholder="xxxxx.apps.googleusercontent.com" autocomplete="off">
+    </label>
+    <div class="btn-group" style="margin:10px 0">
+      <button type="button" id="saveClientIdBtn" class="secondary">Lưu Client ID</button>
+      <button type="button" id="googleLoginBtn" class="primary">Đăng nhập Google</button>
+      <button type="button" id="googleLogoutBtn" class="secondary hidden">Đăng xuất</button>
+    </div>
+    <p id="googleStatus" style="font-size:12px;color:#075e58;margin:6px 0">Chưa đăng nhập</p>
+    <div class="btn-group" style="margin:10px 0">
+      <button type="button" id="driveBackupBtn" class="primary" disabled>Sao lưu lên Drive (ghi đè)</button>
+      <button type="button" id="driveRestoreBtn" class="secondary" disabled>Khôi phục từ Drive</button>
+    </div>
+    <details style="font-size:12px;margin-top:12px">
+      <summary style="cursor:pointer;font-weight:700">Hướng dẫn tạo Google Client ID</summary>
+      <ol style="padding-left:18px;margin:8px 0;line-height:1.5">
+        <li>Vào <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a></li>
+        <li>Tạo project → bật <b>Google Drive API</b></li>
+        <li>Credentials → Create Credentials → OAuth client ID → Web application</li>
+        <li>Authorized JavaScript origins: thêm URL app (https://...github.io hoặc http://localhost:...)</li>
+        <li>Copy Client ID dán vào ô trên → Lưu Client ID → Đăng nhập Google</li>
+      </ol>
+    </details>
+
+    <hr>
+    <h3>Đăng nhập sinh trắc học (vân tay / Face ID)</h3>
+    <p style="font-size:12px;color:#5b6967">Dùng vân tay hoặc Face ID của thiết bị để mở khóa nhanh (vẫn cần PIN lần đầu để đăng ký).</p>
+    <div class="btn-group" style="margin:10px 0">
+      <button type="button" id="bioRegisterBtn" class="primary">Đăng ký vân tay / Face ID</button>
+      <button type="button" id="bioRemoveBtn" class="secondary">Hủy đăng ký sinh trắc học</button>
+    </div>
+    <p id="bioStatus" style="font-size:12px;color:#5b6967;margin:4px 0"></p>
+
+    <hr>
+    <h3>Thông tin</h3>
+    <p style="font-size:12px;margin:0">Phiên bản: 4.4 · Dữ liệu lưu cục bộ, mã hóa AES-GCM · Sao lưu Drive ghi đè thủ công.</p>
   </div>
 </section>
 
-<!-- CÀI ĐẶT -->
-<section id="settingsView" class="view hidden">
-  <div class="panel backup-panel">
-    <h2>Cài đặt</h2>
-    <p style="font-size:12px;color:#5b6967">Ứng dụng chạy hoàn toàn offline. Tính năng Google Drive cần cấu hình thêm (API key, OAuth) trên Google Cloud Console và chưa được tích hợp sẵn trong bản offline này.</p>
-    <hr>
-    <h3>Sao lưu cục bộ nâng cao</h3>
-    <p style="font-size:12px">Bạn có thể tạo mật khẩu riêng cho file sao lưu (khác PIN mở app) khi xuất .pfbackup. Hiện tại file sao lưu vẫn dùng PIN kho dữ liệu.</p>
-    <button id="exportBackupBtn2" class="primary">Tải file sao lưu (.pfbackup)</button>
-    <hr>
-    <h3>Thông tin</h3>
-    <p style="font-size:12px;margin:0">Phiên bản: 4.0 thử nghiệm · Dữ liệu lưu cục bộ, mã hóa AES-GCM · Không gửi dữ liệu lên máy chủ.</p>
-  </div>
-</section>
+
 
 <p class="privacy-note">● Dữ liệu lưu cục bộ và được mã hóa. Không gửi dữ liệu tài chính lên máy chủ.</p>
 </section>
